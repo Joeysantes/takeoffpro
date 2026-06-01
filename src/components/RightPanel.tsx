@@ -1,4 +1,3 @@
-import React from 'react';
 import TakeoffList from './TakeoffList';
 import SummaryTable from './SummaryTable';
 import { useTakeoffStore } from '../store/takeoffStore';

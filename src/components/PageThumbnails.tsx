@@ -1,4 +1,3 @@
-import React from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
 
 export default function PageThumbnails() {

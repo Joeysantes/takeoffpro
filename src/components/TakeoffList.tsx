@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
 import type { TradeCategory, MeasurementType } from '../types';
 

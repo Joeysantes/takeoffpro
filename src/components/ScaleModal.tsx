@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
-import { pixelDistance } from '../utils/measurementUtils';
 
 interface Props {
   pixelDist: number;

@@ -1,4 +1,3 @@
-import React from 'react';
 import PageThumbnails from './PageThumbnails';
 import ToolPalette from './ToolPalette';
 

@@ -34,7 +34,8 @@ async function convertPDF(file: File): Promise<PlanPage[]> {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     const ctx = canvas.getContext('2d')!;
-    await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport }).promise;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await page.render({ canvasContext: ctx as any, canvas, viewport } as any).promise;
     pages.push(makePage(i - 1, canvas.toDataURL('image/png'), viewport.width, viewport.height));
   }
   return pages;
@@ -58,9 +59,9 @@ async function convertImage(file: File): Promise<PlanPage[]> {
 }
 
 async function convertTIFF(file: File): Promise<PlanPage[]> {
-  const TIFF = (await import('tiff')).default;
+  const TIFF = await import('tiff');
   const arrayBuffer = await file.arrayBuffer();
-  const ifds = TIFF.decode(arrayBuffer);
+  const ifds = TIFF.decode(arrayBuffer) as { data: Uint8Array | Uint8ClampedArray; width: number; height: number }[];
   const pages: PlanPage[] = [];
   for (let i = 0; i < ifds.length; i++) {
     const ifd = ifds[i];
@@ -98,9 +99,6 @@ async function convertTIFF(file: File): Promise<PlanPage[]> {
 
 function parseDXFLines(text: string): { x1: number; y1: number; x2: number; y2: number }[] {
   const lines: { x1: number; y1: number; x2: number; y2: number }[] = [];
-  const sections = text.split(/\s*0\s*\n/);
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
   const entities: { type: string; values: Map<number, string[]> }[] = [];
   let current: { type: string; values: Map<number, string[]> } | null = null;
 
@@ -120,27 +118,22 @@ function parseDXFLines(text: string): { x1: number; y1: number; x2: number; y2: 
   }
   if (current) entities.push(current);
 
-  const allPts: { x: number; y: number }[] = [];
-
   for (const entity of entities) {
     if (entity.type === 'LINE') {
       const x1 = parseFloat(entity.values.get(10)?.[0] ?? '0');
       const y1 = parseFloat(entity.values.get(20)?.[0] ?? '0');
       const x2 = parseFloat(entity.values.get(11)?.[0] ?? '0');
       const y2 = parseFloat(entity.values.get(21)?.[0] ?? '0');
-      allPts.push({ x: x1, y: y1 }, { x: x2, y: y2 });
       lines.push({ x1, y1, x2, y2 });
     } else if (entity.type === 'LWPOLYLINE') {
       const xs = (entity.values.get(10) ?? []).map(Number);
       const ys = (entity.values.get(20) ?? []).map(Number);
       for (let i = 0; i < xs.length - 1; i++) {
-        allPts.push({ x: xs[i], y: ys[i] }, { x: xs[i + 1], y: ys[i + 1] });
         lines.push({ x1: xs[i], y1: ys[i], x2: xs[i + 1], y2: ys[i + 1] });
       }
     }
   }
 
-  void sections;
   return lines;
 }
 

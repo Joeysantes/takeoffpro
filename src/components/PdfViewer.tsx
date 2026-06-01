@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
 import MeasurementCanvas from './MeasurementCanvas';
 
