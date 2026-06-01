@@ -58,7 +58,6 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     deleteMeasurement,
     selectMeasurement,
     setCalibrationPoints,
-    setActiveTool,
     resetCalibration,
   } = useTakeoffStore();
 
@@ -206,7 +205,7 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   );
 
   const handleDblClick = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
+    (_e: Konva.KonvaEventObject<MouseEvent>) => {
       if (activeTool === 'linear' && inProgress.length >= 2) {
         const pts = inProgress.slice(0, -1); // remove last (duplicate from click)
         finishLinear(pts.length > 0 ? pts : inProgress);

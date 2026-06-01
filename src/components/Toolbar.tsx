@@ -1,4 +1,3 @@
-import React from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
 import { exportToExcel, exportToPDF, exportToCSV } from '../utils/exportUtils';
 import type { ColorMode } from '../types';
