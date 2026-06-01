@@ -1,4 +1,4 @@
-export type ColorMode = 'full' | 'grayscale' | 'bw' | 'half';
+export type ColorMode = 'full' | 'grayscale' | 'bw';
 export type TradeCategory =
   | 'General'
   | 'Concrete'
@@ -10,7 +10,9 @@ export type TradeCategory =
   | 'Painting'
   | 'Flooring';
 export type MeasurementType = 'linear' | 'area' | 'count';
-export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate';
+export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'verify';
+export type AppTab = 'plan' | 'estimating';
+export type PriceMode = 'per-unit' | 'per-sqft' | 'per-cuft';
 
 export interface Point {
   x: number;
@@ -20,6 +22,11 @@ export interface Point {
 export interface ScaleConfig {
   pixelsPerFoot: number;
   label: string;
+}
+
+export interface UploadOptions {
+  colorMode: ColorMode;
+  scale: number; // 0.75 | 1 | 1.5
 }
 
 export interface Measurement {
@@ -34,10 +41,14 @@ export interface Measurement {
   unitCost: number;
   visible: boolean;
   pageIndex: number;
+  height?: number;
+  priceMode?: PriceMode;
+  formula?: string;
 }
 
 export interface PlanPage {
   pageIndex: number;
+  name?: string;
   imageDataUrl: string;
   width: number;
   height: number;

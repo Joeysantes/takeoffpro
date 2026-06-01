@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Line, Circle, Text, Group, Rect } from 'react-konva';
 import type Konva from 'konva';
 import { v4 as uuidv4 } from 'uuid';
@@ -28,7 +28,7 @@ function toStore(p: Point, zoom: number): Point {
   return { x: p.x / zoom, y: p.y / zoom };
 }
 
-function getMeasurementCount(measurements: Measurement[], type: string): number {
+function countByType(measurements: Measurement[], type: string): number {
   return measurements.filter((m) => m.type === type).length;
 }
 
@@ -53,11 +53,16 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     activeTool,
     selectedMeasurementId,
     isCalibrating,
+    isVerifying,
     calibrationPoints,
+    verifyPoints,
     addMeasurement,
     deleteMeasurement,
     selectMeasurement,
     setCalibrationPoints,
+    setVerifyPoints,
+    setVerifyResult,
+    clearVerify,
     resetCalibration,
   } = useTakeoffStore();
 
@@ -70,172 +75,125 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   const [showScaleModal, setShowScaleModal] = useState(false);
   const [scalePixelDist, setScalePixelDist] = useState(0);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const stageRef = useRef<Konva.Stage>(null);
-
-  // Dynamically import ScaleModal to avoid circular issues
-  const [ScaleModal, setScaleModalComponent] = useState<React.ComponentType<{
-    pixelDist: number;
-    pageIndex: number;
-    onClose: () => void;
+  const [ScaleModalComp, setScaleModalComp] = useState<React.ComponentType<{
+    pixelDist: number; pageIndex: number; onClose: () => void;
   }> | null>(null);
 
   useEffect(() => {
-    import('./ScaleModal').then((m) => setScaleModalComponent(() => m.default));
+    import('./ScaleModal').then((m) => setScaleModalComp(() => m.default));
   }, []);
 
-  // Reset in-progress when tool changes
   useEffect(() => {
     setInProgress([]);
     setMousePos(null);
   }, [activeTool]);
 
-  // Keyboard handlers
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.code === 'Space') return; // handled by PdfViewer for pan
       if (e.key === 'Escape') {
-        if (isCalibrating) {
-          resetCalibration();
-        }
+        if (isCalibrating) resetCalibration();
+        if (isVerifying) clearVerify();
         setInProgress([]);
         setMousePos(null);
       }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if ((e.key === 'Delete' || e.key === 'Backspace')) {
         const el = document.activeElement;
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
-        if (selectedMeasurementId) {
-          deleteMeasurement(selectedMeasurementId);
-        }
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
+        if (selectedMeasurementId) deleteMeasurement(selectedMeasurementId);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isCalibrating, selectedMeasurementId, resetCalibration, deleteMeasurement]);
+  }, [isCalibrating, isVerifying, selectedMeasurementId, resetCalibration, clearVerify, deleteMeasurement]);
 
-  const getPointerPos = useCallback(
-    (stage: Konva.Stage): Point => {
-      const pos = stage.getPointerPosition() ?? { x: 0, y: 0 };
-      return pos;
-    },
-    []
-  );
+  const getPos = useCallback((stage: Konva.Stage): Point => {
+    return stage.getPointerPosition() ?? { x: 0, y: 0 };
+  }, []);
 
-  const handleMouseMove = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
-      const pos = getPointerPos(e.target.getStage()!);
-      setMousePos(pos);
-    },
-    [getPointerPos]
-  );
+  const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    setMousePos(getPos(e.target.getStage()!));
+  }, [getPos]);
 
-  const handleClick = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
-      if (e.evt.button !== 0) return;
-      const stage = e.target.getStage()!;
-      const pos = getPointerPos(stage);
-      const storedPos = toStore(pos, zoom);
+  const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button !== 0) return;
+    const pos = getPos(e.target.getStage()!);
+    const stored = toStore(pos, zoom);
 
-      if (isCalibrating) {
-        const newPts = [...calibrationPoints, storedPos];
-        setCalibrationPoints(newPts);
-        if (newPts.length === 2) {
-          const p1d = toDisplay(newPts[0], zoom);
-          const p2d = toDisplay(newPts[1], zoom);
-          setScalePixelDist(pixelDistance(p1d, p2d));
-          setShowScaleModal(true);
-        }
-        return;
+    // Calibrate
+    if (isCalibrating) {
+      const newPts = [...calibrationPoints, stored];
+      setCalibrationPoints(newPts);
+      if (newPts.length === 2) {
+        const p1d = toDisplay(newPts[0], zoom);
+        const p2d = toDisplay(newPts[1], zoom);
+        setScalePixelDist(pixelDistance(p1d, p2d));
+        setShowScaleModal(true);
       }
+      return;
+    }
 
-      if (activeTool === 'select') {
-        selectMeasurement(null);
-        return;
+    // Verify
+    if (isVerifying) {
+      const newPts = [...verifyPoints, stored];
+      setVerifyPoints(newPts);
+      if (newPts.length >= 2) {
+        const p1d = toDisplay(newPts[0], zoom);
+        const p2d = toDisplay(newPts[1], zoom);
+        const dist = pixelDistance(p1d, p2d);
+        const feet = scale ? pixelsToFeet(dist, scale.pixelsPerFoot) : null;
+        setVerifyResult(feet);
       }
+      return;
+    }
 
-      if (activeTool === 'count') {
-        const existingCount = getMeasurementCount(measurements, 'count');
-        const color = getNextColor(measurements.length);
-        addMeasurement({
-          id: uuidv4(),
-          type: 'count',
-          name: `Count ${existingCount + 1}`,
-          trade: 'General',
-          color,
-          points: [storedPos],
-          value: 1,
-          unit: 'ea',
-          unitCost: 0,
-          visible: true,
-          pageIndex,
-        });
-        return;
-      }
+    if (activeTool === 'select') { selectMeasurement(null); return; }
 
-      if (activeTool === 'linear') {
-        const newPts = [...inProgress, storedPos];
-        setInProgress(newPts);
-        return;
-      }
+    if (activeTool === 'count') {
+      const color = getNextColor(measurements.length);
+      addMeasurement({
+        id: uuidv4(), type: 'count',
+        name: `Count ${countByType(measurements, 'count') + 1}`,
+        trade: 'General', color, points: [stored],
+        value: 1, unit: 'ea', unitCost: 0, visible: true, pageIndex,
+      });
+      return;
+    }
 
-      if (activeTool === 'area') {
-        if (inProgress.length >= 3) {
-          const firstDisp = toDisplay(inProgress[0], zoom);
-          const dist = pixelDistance(pos, firstDisp);
-          if (dist < 10) {
-            finishArea(inProgress);
-            return;
-          }
-        }
-        setInProgress([...inProgress, storedPos]);
-        return;
-      }
-    },
-    [
-      activeTool,
-      inProgress,
-      isCalibrating,
-      calibrationPoints,
-      measurements,
-      zoom,
-      pageIndex,
-      getPointerPos,
-      addMeasurement,
-      selectMeasurement,
-      setCalibrationPoints,
-    ]
-  );
+    if (activeTool === 'linear') {
+      setInProgress([...inProgress, stored]);
+      return;
+    }
 
-  const handleDblClick = useCallback(
-    (_e: Konva.KonvaEventObject<MouseEvent>) => {
-      if (activeTool === 'linear' && inProgress.length >= 2) {
-        const pts = inProgress.slice(0, -1); // remove last (duplicate from click)
-        finishLinear(pts.length > 0 ? pts : inProgress);
-        return;
+    if (activeTool === 'area') {
+      if (inProgress.length >= 3) {
+        const firstDisp = toDisplay(inProgress[0], zoom);
+        if (pixelDistance(pos, firstDisp) < 10) { finishArea(inProgress); return; }
       }
-      if (activeTool === 'area' && inProgress.length >= 3) {
-        finishArea(inProgress);
-        return;
-      }
-    },
-    [activeTool, inProgress]
-  );
+      setInProgress([...inProgress, stored]);
+    }
+  }, [activeTool, inProgress, isCalibrating, isVerifying, calibrationPoints, verifyPoints,
+      measurements, zoom, pageIndex, scale, getPos, addMeasurement, selectMeasurement,
+      setCalibrationPoints, setVerifyPoints, setVerifyResult]);
+
+  const handleDblClick = useCallback((_e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (activeTool === 'linear' && inProgress.length >= 2) {
+      finishLinear(inProgress.slice(0, -1).length > 0 ? inProgress.slice(0, -1) : inProgress);
+      return;
+    }
+    if (activeTool === 'area' && inProgress.length >= 3) {
+      finishArea(inProgress);
+    }
+  }, [activeTool, inProgress]);
 
   function finishLinear(points: Point[]) {
     if (points.length < 2) { setInProgress([]); return; }
     const { value, unit } = computeValue(points, 'linear', scale);
-    const color = getNextColor(measurements.length);
-    const cnt = getMeasurementCount(measurements, 'linear');
     addMeasurement({
-      id: uuidv4(),
-      type: 'linear',
-      name: `Linear ${cnt + 1}`,
-      trade: 'General',
-      color,
-      points,
-      value,
-      unit,
-      unitCost: 0,
-      visible: true,
-      pageIndex,
+      id: uuidv4(), type: 'linear',
+      name: `Linear ${countByType(measurements, 'linear') + 1}`,
+      trade: 'General', color: getNextColor(measurements.length),
+      points, value, unit, unitCost: 0, visible: true, pageIndex,
     });
     setInProgress([]);
   }
@@ -243,99 +201,64 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   function finishArea(points: Point[]) {
     if (points.length < 3) { setInProgress([]); return; }
     const { value, unit } = computeValue(points, 'area', scale);
-    const color = getNextColor(measurements.length);
-    const cnt = getMeasurementCount(measurements, 'area');
     addMeasurement({
-      id: uuidv4(),
-      type: 'area',
-      name: `Area ${cnt + 1}`,
-      trade: 'General',
-      color,
-      points,
-      value,
-      unit,
-      unitCost: 0,
-      visible: true,
-      pageIndex,
+      id: uuidv4(), type: 'area',
+      name: `Area ${countByType(measurements, 'area') + 1}`,
+      trade: 'General', color: getNextColor(measurements.length),
+      points, value, unit, unitCost: 0, visible: true, pageIndex,
     });
     setInProgress([]);
   }
 
-  const handleMeasurementClick = useCallback(
-    (id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
-      e.cancelBubble = true;
-      if (activeTool === 'select') {
-        selectMeasurement(id);
-      }
-    },
-    [activeTool, selectMeasurement]
-  );
+  const handleMeasurementClick = useCallback((id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.cancelBubble = true;
+    if (activeTool === 'select') selectMeasurement(id);
+  }, [activeTool, selectMeasurement]);
 
-  const handleCountRightClick = useCallback(
-    (id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
-      e.evt.preventDefault();
-      deleteMeasurement(id);
-    },
-    [deleteMeasurement]
-  );
+  const handleCountRightClick = useCallback((id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.evt.preventDefault();
+    deleteMeasurement(id);
+  }, [deleteMeasurement]);
 
-  const cursor =
-    activeTool === 'calibrate' || activeTool === 'linear' || activeTool === 'area' || activeTool === 'count'
-      ? 'crosshair'
-      : 'default';
+  const cursor = (isCalibrating || isVerifying || activeTool === 'linear' || activeTool === 'area' || activeTool === 'count')
+    ? 'crosshair' : 'default';
 
-  const displayPts = (pts: Point[]) => pts.flatMap((p) => [p.x * zoom, p.y * zoom]);
+  function displayPts(pts: Point[]) {
+    return pts.flatMap((p) => [p.x * zoom, p.y * zoom]);
+  }
 
   function renderMeasurement(m: Measurement) {
     if (!m.visible) return null;
     const isSelected = m.id === selectedMeasurementId;
     const isHovered = m.id === hoveredId;
     const pts = m.points.map((p) => toDisplay(p, zoom));
+    const r = parseInt(m.color.slice(1, 3), 16);
+    const g = parseInt(m.color.slice(3, 5), 16);
+    const b = parseInt(m.color.slice(5, 7), 16);
 
     if (m.type === 'count') {
+      const idx = measurements.filter((x) => x.type === 'count' && x.id <= m.id).length;
       return (
-        <Group
-          key={m.id}
-          x={pts[0].x}
-          y={pts[0].y}
+        <Group key={m.id} x={pts[0].x} y={pts[0].y}
           onClick={(e) => handleMeasurementClick(m.id, e)}
           onContextMenu={(e) => handleCountRightClick(m.id, e)}
           onMouseEnter={() => setHoveredId(m.id)}
           onMouseLeave={() => setHoveredId(null)}
         >
-          <Circle
-            radius={12}
-            fill={m.color}
-            stroke={isSelected ? '#fff' : 'transparent'}
-            strokeWidth={2}
-            shadowBlur={isHovered ? 6 : 0}
-          />
-          <Text
-            text={String(measurements.filter((x) => x.type === 'count' && x.id <= m.id && x.pageIndex === pageIndex).length)}
-            fontSize={10}
-            fill="#fff"
-            fontStyle="bold"
-            align="center"
-            verticalAlign="middle"
-            width={24}
-            height={24}
-            offsetX={12}
-            offsetY={12}
-          />
+          <Circle radius={12} fill={m.color} stroke={isSelected ? '#fff' : 'transparent'} strokeWidth={2} shadowBlur={isHovered ? 6 : 0} />
+          <Text text={String(idx)} fontSize={10} fill="#fff" fontStyle="bold"
+            align="center" verticalAlign="middle" width={24} height={24} offsetX={12} offsetY={12} />
         </Group>
       );
     }
 
     if (m.type === 'linear') {
       const flatPts = displayPts(m.points);
-      const midIdx = Math.floor(m.points.length / 2);
-      const mid = pts[midIdx] ?? pts[0];
+      const mid = pts[Math.floor(pts.length / 2)] ?? pts[0];
+      const label = `${m.value.toFixed(1)} ${m.unit}`;
       return (
         <Group key={m.id}>
-          <Line
-            points={flatPts}
-            stroke={m.color}
-            strokeWidth={isSelected ? 3 : 2}
+          <Line points={flatPts} stroke={m.color} strokeWidth={isSelected ? 3 : 2}
             dash={isSelected ? [8, 4] : undefined}
             onClick={(e) => handleMeasurementClick(m.id, e)}
             onMouseEnter={() => setHoveredId(m.id)}
@@ -343,22 +266,8 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
             hitStrokeWidth={12}
           />
           <Group x={mid.x} y={mid.y}>
-            <Rect
-              x={-2}
-              y={-9}
-              width={`${m.value.toFixed(1)} ${m.unit}`.length * 5 + 8}
-              height={14}
-              fill={m.color}
-              cornerRadius={4}
-            />
-            <Text
-              text={`${m.value.toFixed(1)} ${m.unit}`}
-              fontSize={9}
-              fill="#fff"
-              fontStyle="bold"
-              x={2}
-              y={-8}
-            />
+            <Rect x={-2} y={-9} width={label.length * 5 + 8} height={14} fill={m.color} cornerRadius={4} />
+            <Text text={label} fontSize={9} fill="#fff" fontStyle="bold" x={2} y={-8} />
           </Group>
         </Group>
       );
@@ -367,40 +276,19 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     if (m.type === 'area') {
       const flatPts = displayPts(m.points);
       const centroid = polygonCentroid(pts);
-      const hexColor = m.color;
-      const r = parseInt(hexColor.slice(1, 3), 16);
-      const g = parseInt(hexColor.slice(3, 5), 16);
-      const b = parseInt(hexColor.slice(5, 7), 16);
+      const label = `${m.value.toFixed(1)} ${m.unit}`;
       return (
         <Group key={m.id}>
-          <Line
-            points={flatPts}
-            closed
-            fill={`rgba(${r},${g},${b},0.15)`}
-            stroke={m.color}
-            strokeWidth={isSelected ? 3 : 2}
+          <Line points={flatPts} closed fill={`rgba(${r},${g},${b},0.15)`}
+            stroke={m.color} strokeWidth={isSelected ? 3 : 2}
             dash={isSelected ? [8, 4] : undefined}
             onClick={(e) => handleMeasurementClick(m.id, e)}
             onMouseEnter={() => setHoveredId(m.id)}
             onMouseLeave={() => setHoveredId(null)}
           />
           <Group x={centroid.x} y={centroid.y}>
-            <Rect
-              x={-2}
-              y={-9}
-              width={`${m.value.toFixed(1)} ${m.unit}`.length * 5 + 8}
-              height={14}
-              fill={m.color}
-              cornerRadius={4}
-            />
-            <Text
-              text={`${m.value.toFixed(1)} ${m.unit}`}
-              fontSize={9}
-              fill="#fff"
-              fontStyle="bold"
-              x={2}
-              y={-8}
-            />
+            <Rect x={-2} y={-9} width={label.length * 5 + 8} height={14} fill={m.color} cornerRadius={4} />
+            <Text text={label} fontSize={9} fill="#fff" fontStyle="bold" x={2} y={-8} />
           </Group>
         </Group>
       );
@@ -411,74 +299,74 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   function renderInProgress() {
     if (inProgress.length === 0) return null;
     const pts = inProgress.map((p) => toDisplay(p, zoom));
-
+    const allPts = mousePos ? [...pts, mousePos] : pts;
+    const flat = allPts.flatMap((p) => [p.x, p.y]);
     if (activeTool === 'linear') {
-      const allPts = mousePos ? [...pts, mousePos] : pts;
-      const flatPts = allPts.flatMap((p) => [p.x, p.y]);
-      return (
-        <Line
-          points={flatPts}
-          stroke="#2563EB"
-          strokeWidth={2}
-          dash={[6, 3]}
-          opacity={0.8}
-        />
-      );
+      return <Line points={flat} stroke="#2563EB" strokeWidth={2} dash={[6, 3]} opacity={0.8} />;
     }
-
     if (activeTool === 'area') {
-      const allPts = mousePos ? [...pts, mousePos] : pts;
-      const flatPts = allPts.flatMap((p) => [p.x, p.y]);
-      return (
-        <Line
-          points={flatPts}
-          closed={false}
-          stroke="#2563EB"
-          strokeWidth={2}
-          fill="rgba(37,99,235,0.1)"
-          dash={[6, 3]}
-        />
-      );
+      return <Line points={flat} stroke="#2563EB" strokeWidth={2} fill="rgba(37,99,235,0.08)" dash={[6, 3]} />;
     }
-
     return null;
   }
 
   function renderCalibration() {
-    if (!isCalibrating) return null;
+    if (!isCalibrating || calibrationPoints.length === 0) return null;
     const pts = calibrationPoints.map((p) => toDisplay(p, zoom));
     return (
       <>
-        {pts.map((p, i) => (
-          <Circle key={i} x={p.x} y={p.y} radius={5} fill="#EF4444" />
-        ))}
+        {pts.map((p, i) => <Circle key={i} x={p.x} y={p.y} radius={5} fill="#EF4444" />)}
         {pts.length === 2 && (
-          <Line
-            points={[pts[0].x, pts[0].y, pts[1].x, pts[1].y]}
-            stroke="#EF4444"
-            strokeWidth={2}
-          />
+          <Line points={[pts[0].x, pts[0].y, pts[1].x, pts[1].y]} stroke="#EF4444" strokeWidth={2} />
         )}
       </>
     );
   }
 
-  // Tooltip
+  function renderVerify() {
+    if (!isVerifying || verifyPoints.length === 0) return null;
+    const pts = verifyPoints.map((p) => toDisplay(p, zoom));
+    const allPts = mousePos && verifyPoints.length === 1 ? [...pts, mousePos] : pts;
+    const hasResult = verifyPoints.length >= 2;
+    const mid = allPts.length >= 2 ? { x: (allPts[0].x + allPts[1].x) / 2, y: (allPts[0].y + allPts[1].y) / 2 } : null;
+    const verifyResult = useRef<number | null>(null);
+    if (hasResult && scale) {
+      const d = pixelDistance(pts[0], pts[1]);
+      verifyResult.current = pixelsToFeet(d, scale.pixelsPerFoot);
+    }
+    const resultFt = verifyResult.current;
+    const label = hasResult ? (scale ? `${resultFt?.toFixed(2)} ft` : 'No scale') : '';
+
+    return (
+      <>
+        {allPts.length >= 2 && (
+          <Line
+            points={allPts.flatMap((p) => [p.x, p.y])}
+            stroke="#16A34A"
+            strokeWidth={2}
+            dash={[8, 4]}
+          />
+        )}
+        {pts.map((p, i) => <Circle key={i} x={p.x} y={p.y} radius={5} fill="#16A34A" />)}
+        {hasResult && mid && label && (
+          <Group x={mid.x} y={mid.y - 20}>
+            <Rect x={-4} y={-12} width={label.length * 7 + 12} height={18} fill="#16A34A" cornerRadius={4} />
+            <Text text={label} fontSize={11} fill="#fff" fontStyle="bold" x={2} y={-10} />
+          </Group>
+        )}
+      </>
+    );
+  }
+
   function renderTooltip() {
     if (!hoveredId || !mousePos) return null;
     const m = measurements.find((x) => x.id === hoveredId);
     if (!m) return null;
     return (
       <Group x={mousePos.x + 10} y={mousePos.y - 30}>
-        <Rect fill="rgba(0,0,0,0.75)" cornerRadius={4} width={120} height={32} />
+        <Rect fill="rgba(0,0,0,0.75)" cornerRadius={4} width={130} height={32} />
         <Text text={m.name} fill="#fff" fontSize={10} fontStyle="bold" x={6} y={5} />
-        <Text
-          text={`${m.value.toFixed(2)} ${m.unit}`}
-          fill="#d4d4d4"
-          fontSize={9}
-          x={6}
-          y={17}
-        />
+        <Text text={`${m.value.toFixed(2)} ${m.unit}`} fill="#d4d4d4" fontSize={9} x={6} y={17} />
       </Group>
     );
   }
@@ -486,7 +374,6 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   return (
     <>
       <Stage
-        ref={stageRef}
         width={width}
         height={height}
         style={{ position: 'absolute', top: 0, left: 0, cursor }}
@@ -498,12 +385,13 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
           {measurements.map(renderMeasurement)}
           {renderInProgress()}
           {renderCalibration()}
+          {renderVerify()}
           {renderTooltip()}
         </Layer>
       </Stage>
 
-      {showScaleModal && ScaleModal && (
-        <ScaleModal
+      {showScaleModal && ScaleModalComp && (
+        <ScaleModalComp
           pixelDist={scalePixelDist}
           pageIndex={pageIndex}
           onClose={() => setShowScaleModal(false)}

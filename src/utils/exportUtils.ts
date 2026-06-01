@@ -3,57 +3,86 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, Measurement } from '../types';
 
+function pageName(project: Project, pageIndex: number): string {
+  const p = project.pages.find((x) => x.pageIndex === pageIndex);
+  return p?.name ?? `Page ${pageIndex + 1}`;
+}
+
+function computeTotal(m: Measurement): number {
+  if (m.type === 'linear' && m.priceMode === 'per-sqft' && m.height) {
+    return m.value * m.height * m.unitCost;
+  }
+  if (m.type === 'area' && m.priceMode === 'per-cuft' && m.height) {
+    return m.value * m.height * m.unitCost;
+  }
+  return m.value * m.unitCost;
+}
+
+function computeQty(m: Measurement): number {
+  if (m.type === 'linear' && m.priceMode === 'per-sqft' && m.height) {
+    return m.value * m.height;
+  }
+  if (m.type === 'area' && m.priceMode === 'per-cuft' && m.height) {
+    return m.value * m.height;
+  }
+  return m.value;
+}
+
+function computeUnit(m: Measurement): string {
+  if (m.priceMode === 'per-sqft') return 'sq ft';
+  if (m.priceMode === 'per-cuft') return 'cu ft';
+  return m.unit;
+}
+
 function allMeasurements(project: Project): Measurement[] {
   return project.pages.flatMap((p) => p.measurements);
 }
 
-function totalCost(m: Measurement): number {
-  return m.value * m.unitCost;
-}
-
 export function exportToExcel(project: Project): void {
   const measurements = allMeasurements(project);
+  const TRADES = [...new Set(measurements.map((m) => m.trade))];
 
   const summaryRows: unknown[][] = [
-    ['Trade', 'Item', 'Page', 'Type', 'Qty', 'Unit', 'Unit Cost', 'Total'],
+    ['Trade', 'Item', 'Page', 'Type', 'Qty', 'Unit', 'Height', 'Unit Cost', 'Formula', 'Total'],
   ];
-
-  const trades = [...new Set(measurements.map((m) => m.trade))];
-  for (const trade of trades) {
+  for (const trade of TRADES) {
     const group = measurements.filter((m) => m.trade === trade);
     for (const m of group) {
       summaryRows.push([
         trade,
         m.name,
-        m.pageIndex + 1,
+        pageName(project, m.pageIndex),
         m.type,
-        +m.value.toFixed(2),
-        m.unit,
+        +computeQty(m).toFixed(2),
+        computeUnit(m),
+        m.height ?? '',
         m.unitCost,
-        +totalCost(m).toFixed(2),
+        m.formula ?? '',
+        +computeTotal(m).toFixed(2),
       ]);
     }
-    const subtotal = group.reduce((s, m) => s + totalCost(m), 0);
-    summaryRows.push(['', `${trade} Subtotal`, '', '', '', '', '', +subtotal.toFixed(2)]);
+    const subtotal = group.reduce((s, m) => s + computeTotal(m), 0);
+    summaryRows.push(['', `${trade} Subtotal`, '', '', '', '', '', '', '', +subtotal.toFixed(2)]);
   }
-  const grand = measurements.reduce((s, m) => s + totalCost(m), 0);
-  summaryRows.push(['', 'GRAND TOTAL', '', '', '', '', '', +grand.toFixed(2)]);
+  const grand = measurements.reduce((s, m) => s + computeTotal(m), 0);
+  summaryRows.push(['', 'GRAND TOTAL', '', '', '', '', '', '', '', +grand.toFixed(2)]);
 
   const allRows: unknown[][] = [
-    ['ID', 'Page', 'Trade', 'Name', 'Type', 'Qty', 'Unit', 'Unit Cost', 'Total', 'Visible'],
+    ['ID', 'Page', 'Trade', 'Name', 'Type', 'Qty', 'Unit', 'Height', 'Unit Cost', 'Formula', 'Total'],
   ];
   for (const m of measurements) {
     allRows.push([
       m.id,
-      m.pageIndex + 1,
+      pageName(project, m.pageIndex),
       m.trade,
       m.name,
       m.type,
-      +m.value.toFixed(2),
-      m.unit,
+      +computeQty(m).toFixed(2),
+      computeUnit(m),
+      m.height ?? '',
       m.unitCost,
-      +totalCost(m).toFixed(2),
-      m.visible ? 'Yes' : 'No',
+      m.formula ?? '',
+      +computeTotal(m).toFixed(2),
     ]);
   }
 
@@ -67,7 +96,7 @@ export function exportToPDF(project: Project): void {
   const measurements = allMeasurements(project);
   const doc = new jsPDF();
   const now = new Date().toLocaleDateString();
-  const grand = measurements.reduce((s, m) => s + totalCost(m), 0);
+  const grand = measurements.reduce((s, m) => s + computeTotal(m), 0);
 
   doc.setFontSize(18);
   doc.text(project.name, 14, 20);
@@ -80,21 +109,22 @@ export function exportToPDF(project: Project): void {
 
   for (const trade of trades) {
     const group = measurements.filter((m) => m.trade === trade);
-    const subtotal = group.reduce((s, m) => s + totalCost(m), 0);
+    const subtotal = group.reduce((s, m) => s + computeTotal(m), 0);
 
     autoTable(doc, {
       startY: y,
-      head: [[trade, 'Item', 'Qty', 'Unit', 'Unit Cost', 'Total']],
+      head: [[trade, 'Item', 'Page', 'Qty', 'Unit', 'Unit Cost', 'Total']],
       body: [
         ...group.map((m) => [
           '',
           m.name,
-          m.value.toFixed(2),
-          m.unit,
+          pageName(project, m.pageIndex),
+          computeQty(m).toFixed(2),
+          computeUnit(m),
           `$${m.unitCost.toFixed(2)}`,
-          `$${totalCost(m).toFixed(2)}`,
+          `$${computeTotal(m).toFixed(2)}`,
         ]),
-        ['', 'Subtotal', '', '', '', `$${subtotal.toFixed(2)}`],
+        ['', 'Subtotal', '', '', '', '', `$${subtotal.toFixed(2)}`],
       ],
       theme: 'striped',
       styles: { fontSize: 9 },
@@ -111,10 +141,7 @@ export function exportToPDF(project: Project): void {
     });
 
     y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
-    if (y > 250) {
-      doc.addPage();
-      y = 20;
-    }
+    if (y > 250) { doc.addPage(); y = 20; }
   }
 
   doc.save(`${project.name}-takeoff-report.pdf`);
@@ -122,19 +149,20 @@ export function exportToPDF(project: Project): void {
 
 export function exportToCSV(project: Project): void {
   const measurements = allMeasurements(project);
-  const header = ['ID', 'Page', 'Trade', 'Name', 'Type', 'Qty', 'Unit', 'Unit Cost', 'Total'];
+  const header = ['ID', 'Page', 'Trade', 'Name', 'Type', 'Qty', 'Unit', 'Height', 'Unit Cost', 'Formula', 'Total'];
   const rows = measurements.map((m) => [
     m.id,
-    m.pageIndex + 1,
+    pageName(project, m.pageIndex),
     m.trade,
     m.name,
     m.type,
-    m.value.toFixed(2),
-    m.unit,
+    computeQty(m).toFixed(2),
+    computeUnit(m),
+    m.height ?? '',
     m.unitCost,
-    totalCost(m).toFixed(2),
+    m.formula ?? '',
+    computeTotal(m).toFixed(2),
   ]);
-
   const csv = [header, ...rows].map((r) => r.map((c) => `"${c}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);

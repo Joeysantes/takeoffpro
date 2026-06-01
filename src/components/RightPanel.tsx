@@ -1,5 +1,6 @@
 import TakeoffList from './TakeoffList';
 import SummaryTable from './SummaryTable';
+import MeasurementProperties from './MeasurementProperties';
 import { useTakeoffStore } from '../store/takeoffStore';
 
 export default function RightPanel() {
@@ -12,6 +13,7 @@ export default function RightPanel() {
       <div className="px-3 py-2 border-b border-zinc-200 bg-zinc-50 shrink-0">
         <h2 className="text-sm font-semibold text-zinc-700">Takeoffs</h2>
       </div>
+      <MeasurementProperties />
       <TakeoffList />
       <SummaryTable />
     </div>

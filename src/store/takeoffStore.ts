@@ -4,26 +4,30 @@ import type {
   Project,
   PlanPage,
   ActiveTool,
-  ColorMode,
   ScaleConfig,
   Measurement,
   Point,
+  AppTab,
 } from '../types';
 
 interface TakeoffState {
   project: Project | null;
   currentPageIndex: number;
   activeTool: ActiveTool;
+  activeTab: AppTab;
   selectedMeasurementId: string | null;
   zoom: number;
   isCalibrating: boolean;
   calibrationPoints: Point[];
+  isVerifying: boolean;
+  verifyPoints: Point[];
+  verifyResult: number | null;
 
   setProject: (project: Project | null) => void;
   setCurrentPage: (index: number) => void;
   setActiveTool: (tool: ActiveTool) => void;
+  setActiveTab: (tab: AppTab) => void;
   setZoom: (zoom: number) => void;
-  setColorMode: (pageIndex: number, mode: ColorMode) => void;
   setScale: (pageIndex: number, scale: ScaleConfig) => void;
   addMeasurement: (measurement: Measurement) => void;
   updateMeasurement: (id: string, updates: Partial<Measurement>) => void;
@@ -31,10 +35,19 @@ interface TakeoffState {
   setCalibrationPoints: (points: Point[]) => void;
   resetCalibration: () => void;
   selectMeasurement: (id: string | null) => void;
+  renamePage: (pageIndex: number, name: string) => void;
+  renameProject: (name: string) => void;
+  addPages: (newPages: PlanPage[]) => void;
+  setVerifyPoints: (points: Point[]) => void;
+  setVerifyResult: (result: number | null) => void;
+  clearVerify: () => void;
 }
 
-const updatePage = (pages: PlanPage[], pageIndex: number, updater: (page: PlanPage) => PlanPage): PlanPage[] =>
-  pages.map((p) => (p.pageIndex === pageIndex ? updater(p) : p));
+const updatePage = (
+  pages: PlanPage[],
+  pageIndex: number,
+  updater: (page: PlanPage) => PlanPage
+): PlanPage[] => pages.map((p) => (p.pageIndex === pageIndex ? updater(p) : p));
 
 export const useTakeoffStore = create<TakeoffState>()(
   persist(
@@ -42,27 +55,34 @@ export const useTakeoffStore = create<TakeoffState>()(
       project: null,
       currentPageIndex: 0,
       activeTool: 'select',
+      activeTab: 'plan',
       selectedMeasurementId: null,
       zoom: 1,
       isCalibrating: false,
       calibrationPoints: [],
+      isVerifying: false,
+      verifyPoints: [],
+      verifyResult: null,
 
-      setProject: (project) => set({ project, currentPageIndex: 0, selectedMeasurementId: null }),
-      setCurrentPage: (index) => set({ currentPageIndex: index, selectedMeasurementId: null }),
+      setProject: (project) =>
+        set({ project, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan' }),
+
+      setCurrentPage: (index) =>
+        set({ currentPageIndex: index, selectedMeasurementId: null }),
+
       setActiveTool: (tool) =>
-        set({ activeTool: tool, isCalibrating: tool === 'calibrate', calibrationPoints: [] }),
-      setZoom: (zoom) => set({ zoom }),
-
-      setColorMode: (pageIndex, mode) =>
-        set((state) => {
-          if (!state.project) return state;
-          return {
-            project: {
-              ...state.project,
-              pages: updatePage(state.project.pages, pageIndex, (p) => ({ ...p, colorMode: mode })),
-            },
-          };
+        set({
+          activeTool: tool,
+          isCalibrating: tool === 'calibrate',
+          calibrationPoints: [],
+          isVerifying: tool === 'verify',
+          verifyPoints: [],
+          verifyResult: null,
         }),
+
+      setActiveTab: (tab) => set({ activeTab: tab }),
+
+      setZoom: (zoom) => set({ zoom }),
 
       setScale: (pageIndex, scale) =>
         set((state) => {
@@ -100,7 +120,9 @@ export const useTakeoffStore = create<TakeoffState>()(
               ...state.project,
               pages: state.project.pages.map((p) => ({
                 ...p,
-                measurements: p.measurements.map((m) => (m.id === id ? { ...m, ...updates } : m)),
+                measurements: p.measurements.map((m) =>
+                  m.id === id ? { ...m, ...updates } : m
+                ),
               })),
             },
           };
@@ -117,7 +139,8 @@ export const useTakeoffStore = create<TakeoffState>()(
                 measurements: p.measurements.filter((m) => m.id !== id),
               })),
             },
-            selectedMeasurementId: state.selectedMeasurementId === id ? null : state.selectedMeasurementId,
+            selectedMeasurementId:
+              state.selectedMeasurementId === id ? null : state.selectedMeasurementId,
           };
         }),
 
@@ -128,9 +151,48 @@ export const useTakeoffStore = create<TakeoffState>()(
         set({ calibrationPoints: [], isCalibrating: false, activeTool: 'select' }),
 
       selectMeasurement: (id) => set({ selectedMeasurementId: id }),
+
+      renamePage: (pageIndex, name) =>
+        set((state) => {
+          if (!state.project) return state;
+          return {
+            project: {
+              ...state.project,
+              pages: updatePage(state.project.pages, pageIndex, (p) => ({ ...p, name })),
+            },
+          };
+        }),
+
+      renameProject: (name) =>
+        set((state) => {
+          if (!state.project) return state;
+          return { project: { ...state.project, name } };
+        }),
+
+      addPages: (newPages) =>
+        set((state) => {
+          if (!state.project) return state;
+          const offset = state.project.pages.length;
+          const reindexed = newPages.map((p, i) => ({
+            ...p,
+            pageIndex: offset + i,
+            measurements: p.measurements.map((m) => ({ ...m, pageIndex: offset + i })),
+          }));
+          return {
+            project: {
+              ...state.project,
+              pages: [...state.project.pages, ...reindexed],
+            },
+          };
+        }),
+
+      setVerifyPoints: (points) => set({ verifyPoints: points }),
+
+      setVerifyResult: (result) => set({ verifyResult: result }),
+
+      clearVerify: () =>
+        set({ isVerifying: false, verifyPoints: [], verifyResult: null, activeTool: 'select' }),
     }),
-    {
-      name: 'takeoff-pro',
-    }
+    { name: 'takeoff-pro' }
   )
 );
