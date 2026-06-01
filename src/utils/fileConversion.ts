@@ -36,13 +36,15 @@ function makePage(
   imageDataUrl: string,
   width: number,
   height: number,
-  colorMode: ColorMode
+  colorMode: ColorMode,
+  renderDPI = 96
 ): PlanPage {
   return {
     pageIndex,
     imageDataUrl,
     width,
     height,
+    renderDPI,
     scale: null,
     colorMode,
     measurements: [],
@@ -64,7 +66,8 @@ async function convertPDF(file: File, options: UploadOptions): Promise<PlanPage[
     await page.render({ canvasContext: ctx as any, canvas, viewport } as any).promise;
     const colored = applyColorMode(canvas, options.colorMode);
     const dataUrl = encodeCanvas(colored, options.colorMode);
-    pages.push(makePage(i - 1, dataUrl, viewport.width, viewport.height, options.colorMode));
+    const renderDPI = options.scale * 72;
+    pages.push(makePage(i - 1, dataUrl, viewport.width, viewport.height, options.colorMode, renderDPI));
   }
   return pages;
 }

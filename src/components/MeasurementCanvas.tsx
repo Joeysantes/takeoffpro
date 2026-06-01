@@ -69,6 +69,7 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   const {
     project, zoom, activeTool, selectedMeasurementId,
     isCalibrating, isDimensioning, calibrationPoints, dimensionPoints,
+    hiddenTrades,
     addMeasurement, deleteMeasurement, selectMeasurement,
     setCalibrationPoints, setDimensionPoints, setDimensionResult,
     clearDimension, resetCalibration, setActiveTool,
@@ -300,6 +301,7 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
 
   function renderMeasurement(m: Measurement) {
     if (!m.visible) return null;
+    if (hiddenTrades.includes(m.trade)) return null;
     const isSelected = m.id === selectedMeasurementId;
     const pts = m.points.map((p) => toDisplay(p, zoom));
     const r = parseInt(m.color.slice(1, 3), 16);

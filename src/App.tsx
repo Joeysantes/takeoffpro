@@ -7,13 +7,14 @@ import LeftSidebar from './components/LeftSidebar';
 import PdfViewer from './components/PdfViewer';
 import RightPanel from './components/RightPanel';
 import EstimatingView from './components/EstimatingView';
+import AssembliesView from './components/AssembliesView';
 import UploadOptionsDialog from './components/UploadOptionsDialog';
 import type { Project, UploadOptions } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
-const MIN_PANEL_WIDTH = 200;
-const MAX_PANEL_WIDTH = 520;
-const DEFAULT_PANEL_WIDTH = 300;
+const MIN_PANEL = 180;
+const MAX_PANEL = 520;
+const DEFAULT_PANEL = 300;
 
 export default function App() {
   const { project, setProject, addPages, activeTab } = useTakeoffStore();
@@ -22,17 +23,17 @@ export default function App() {
   const [isAdding, setIsAdding] = useState(false);
 
   // Resizable right panel
-  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const lastPanelWidth = useRef(DEFAULT_PANEL_WIDTH);
+  const lastPanelWidth = useRef(DEFAULT_PANEL);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
-  const dragStartWidth = useRef(DEFAULT_PANEL_WIDTH);
+  const dragStartW = useRef(DEFAULT_PANEL);
 
   function togglePanel() {
     if (panelCollapsed) {
       setPanelCollapsed(false);
-      setPanelWidth(lastPanelWidth.current || DEFAULT_PANEL_WIDTH);
+      setPanelWidth(lastPanelWidth.current || DEFAULT_PANEL);
     } else {
       lastPanelWidth.current = panelWidth;
       setPanelCollapsed(true);
@@ -43,14 +44,14 @@ export default function App() {
     e.preventDefault();
     isDragging.current = true;
     dragStartX.current = e.clientX;
-    dragStartWidth.current = panelWidth;
+    dragStartW.current = panelWidth;
   }, [panelWidth]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = dragStartX.current - e.clientX;
-      const next = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, dragStartWidth.current + delta));
+      const next = Math.max(MIN_PANEL, Math.min(MAX_PANEL, dragStartW.current + delta));
       setPanelWidth(next);
       if (panelCollapsed) setPanelCollapsed(false);
     };
@@ -139,45 +140,41 @@ export default function App() {
 
       <Toolbar onAddPage={(multiple) => triggerUpload(multiple, true)} />
 
-      {activeTab === 'plan' ? (
-        <div className="flex flex-1 overflow-hidden relative">
+      {activeTab === 'plan' && (
+        <div className="flex flex-1 overflow-hidden">
           <LeftSidebar />
           <PdfViewer />
-
           {/* Drag handle */}
           <div
             className="w-1 shrink-0 bg-zinc-200 hover:bg-blue-400 cursor-col-resize transition-colors active:bg-blue-600 z-10"
             onMouseDown={onDragStart}
-            title="Drag to resize panel"
+            title="Drag to resize"
           />
-
-          {/* Right panel */}
-          {!panelCollapsed && (
-            <RightPanel
-              width={effectivePanelWidth}
-              onCollapse={togglePanel}
-            />
-          )}
-
-          {/* Collapsed tab */}
-          {panelCollapsed && (
+          {!panelCollapsed ? (
+            <RightPanel width={effectivePanelWidth} onCollapse={togglePanel} />
+          ) : (
             <button
-              className="shrink-0 w-7 bg-zinc-50 border-l border-zinc-200 flex flex-col items-center justify-center gap-1 hover:bg-blue-50 hover:border-blue-300 transition-colors"
+              className="shrink-0 w-7 bg-zinc-50 border-l border-zinc-200 flex flex-col items-center justify-center hover:bg-blue-50 transition-colors"
               onClick={togglePanel}
               title="Expand Takeoffs panel"
             >
-              <span className="text-zinc-400 text-[10px] rotate-90 whitespace-nowrap tracking-wide font-medium" style={{ writingMode: 'vertical-rl' }}>
-                Takeoffs
-              </span>
               <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
           )}
         </div>
-      ) : (
+      )}
+
+      {activeTab === 'estimating' && (
         <div className="flex flex-1 overflow-hidden">
           <EstimatingView />
+        </div>
+      )}
+
+      {activeTab === 'assemblies' && (
+        <div className="flex flex-1 overflow-hidden">
+          <AssembliesView />
         </div>
       )}
     </div>

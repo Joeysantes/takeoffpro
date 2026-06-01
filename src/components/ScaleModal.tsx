@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
-import { SCALE_PRESETS } from '../utils/scalePresets';
+import { SCALE_PRESETS, getPresetDisplayDistance } from '../utils/scalePresets';
 
 interface Props {
   pixelDist: number;
@@ -9,76 +9,71 @@ interface Props {
 }
 
 export default function ScaleModal({ pixelDist, pageIndex, onClose }: Props) {
-  const { setScale, setScaleAllPages } = useTakeoffStore();
+  const { setScale, setScaleAllPages, pendingPresetLabel, resetCalibration } = useTakeoffStore();
   const [distance, setDistance] = useState('');
   const [unit, setUnit] = useState<'feet' | 'inches' | 'meters'>('feet');
-  const [selectedPreset, setSelectedPreset] = useState('No Scale');
+  const [selectedPreset, setSelectedPreset] = useState('Custom');
   const [applyAll, setApplyAll] = useState(false);
+
+  // Auto-fill from the pending preset the user selected in the toolbar
+  useEffect(() => {
+    if (pendingPresetLabel) {
+      const preset = SCALE_PRESETS.find((p) => p.label === pendingPresetLabel);
+      if (preset) {
+        setSelectedPreset(preset.label);
+        const fill = getPresetDisplayDistance(preset);
+        if (fill) {
+          setDistance(fill.distance);
+          setUnit(fill.unit);
+        }
+      }
+    }
+  }, [pendingPresetLabel]);
 
   function handlePresetChange(label: string) {
     setSelectedPreset(label);
     const preset = SCALE_PRESETS.find((p) => p.label === label);
     if (!preset || preset.none || preset.custom) return;
-
-    if (preset.feetPerInch !== undefined) {
-      // architectural/engineering: preset gives feet per drawing inch
-      // pixelDist pixels = ? real feet → need user to tell us pixels per inch first
-      // Prefill with the nominal feet that corresponds to 1 drawing inch
-      setUnit('feet');
-      setDistance(String(preset.feetPerInch));
-    } else if (preset.ratio !== undefined) {
-      // 1:N — in meters: pixelDist px represents pixelDist/96 inches * (N/12) feet
-      // Simple approach: express as meters
-      setUnit('meters');
-      // assume 96 DPI screen: 1 px ≈ 1/96 inch = 0.0254/96 m
-      const realMeters = (pixelDist / 96) * 0.0254 * preset.ratio;
-      setDistance(realMeters.toFixed(4));
-    }
+    const fill = getPresetDisplayDistance(preset);
+    if (fill) { setDistance(fill.distance); setUnit(fill.unit); }
   }
 
   function handleSet() {
     const dist = parseFloat(distance);
     if (isNaN(dist) || dist <= 0) return;
-
     let distInFeet: number;
     if (unit === 'feet') distInFeet = dist;
     else if (unit === 'inches') distInFeet = dist / 12;
     else distInFeet = dist * 3.28084;
 
     const pixelsPerFoot = pixelDist / distInFeet;
-    const scaleConfig = {
-      pixelsPerFoot,
-      label: `${selectedPreset !== 'No Scale' && selectedPreset !== 'Custom' ? selectedPreset : `${distance} ${unit}`}`,
-    };
+    const label = selectedPreset !== 'No Scale' && selectedPreset !== 'Custom'
+      ? selectedPreset
+      : `${distance} ${unit}`;
+    const scaleConfig = { pixelsPerFoot, label };
 
-    if (applyAll) {
-      setScaleAllPages(scaleConfig);
-    } else {
-      setScale(pageIndex, scaleConfig);
-    }
+    if (applyAll) setScaleAllPages(scaleConfig);
+    else setScale(pageIndex, scaleConfig);
     onClose();
   }
 
   function handleCancel() {
-    const { resetCalibration } = useTakeoffStore.getState();
     resetCalibration();
     onClose();
   }
 
-  const architecturalPresets = SCALE_PRESETS.filter(
-    (p) => !p.none && !p.custom && !p.ratio
-  );
+  const archPresets = SCALE_PRESETS.filter((p) => !p.none && !p.custom && !p.ratio);
   const metricPresets = SCALE_PRESETS.filter((p) => p.ratio !== undefined);
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-xl w-[440px] p-6">
+      <div className="bg-white rounded-xl shadow-xl w-[460px] p-6">
         <h2 className="text-lg font-semibold text-zinc-900 mb-1">Set Scale</h2>
         <p className="text-sm text-zinc-500 mb-4">
-          Measured distance: <strong>{pixelDist.toFixed(1)} px</strong>
+          Pixel span between your two reference points:{' '}
+          <strong>{pixelDist.toFixed(1)} px</strong>
         </p>
 
-        {/* Preset selector */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-zinc-700 mb-1">Scale Preset</label>
           <select
@@ -87,24 +82,33 @@ export default function ScaleModal({ pixelDist, pageIndex, onClose }: Props) {
             onChange={(e) => handlePresetChange(e.target.value)}
           >
             <option value="No Scale">No Scale</option>
+            <optgroup label="── Civil / Engineering ──">
+              {archPresets.filter((p) => (p.feetPerInch ?? 0) >= 10).map((p) => (
+                <option key={p.label} value={p.label} title={p.description}>{p.label}</option>
+              ))}
+            </optgroup>
             <optgroup label="── Architectural ──">
-              {architecturalPresets.map((p) => (
-                <option key={p.label} value={p.label}>{p.label}</option>
+              {archPresets.filter((p) => (p.feetPerInch ?? 0) < 10).map((p) => (
+                <option key={p.label} value={p.label} title={p.description}>{p.label}</option>
               ))}
             </optgroup>
             <optgroup label="── Metric / Ratio ──">
               {metricPresets.map((p) => (
-                <option key={p.label} value={p.label}>{p.label}</option>
+                <option key={p.label} value={p.label} title={p.description}>{p.label}</option>
               ))}
             </optgroup>
             <option value="Custom">Custom</option>
           </select>
+          {selectedPreset && selectedPreset !== 'No Scale' && selectedPreset !== 'Custom' && (
+            <p className="text-xs text-zinc-400 mt-1">
+              {SCALE_PRESETS.find((p) => p.label === selectedPreset)?.description}
+            </p>
+          )}
         </div>
 
-        {/* Manual distance input */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-zinc-700 mb-1">
-            Real-world distance for the two points you clicked
+            Real-world distance for the two points
           </label>
           <div className="flex gap-2">
             <input
@@ -126,7 +130,6 @@ export default function ScaleModal({ pixelDist, pageIndex, onClose }: Props) {
           </div>
         </div>
 
-        {/* Apply to all pages */}
         <label className="flex items-center gap-2 mb-5 cursor-pointer">
           <input
             type="checkbox"
@@ -134,7 +137,7 @@ export default function ScaleModal({ pixelDist, pageIndex, onClose }: Props) {
             checked={applyAll}
             onChange={(e) => setApplyAll(e.target.checked)}
           />
-          <span className="text-sm text-zinc-700">Apply this scale to <strong>all pages</strong></span>
+          <span className="text-sm text-zinc-700">Apply to <strong>all pages</strong></span>
         </label>
 
         <div className="flex gap-2 justify-end">
@@ -149,7 +152,7 @@ export default function ScaleModal({ pixelDist, pageIndex, onClose }: Props) {
             onClick={handleSet}
             disabled={!distance || parseFloat(distance) <= 0}
           >
-            {applyAll ? 'Set Scale for All Pages' : 'Set Scale'}
+            {applyAll ? 'Set Scale — All Pages' : 'Set Scale'}
           </button>
         </div>
       </div>

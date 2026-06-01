@@ -11,23 +11,14 @@ export type TradeCategory =
   | 'Flooring';
 export type MeasurementType = 'linear' | 'area' | 'count';
 export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'dimension';
-export type AppTab = 'plan' | 'estimating';
+export type AppTab = 'plan' | 'estimating' | 'assemblies';
 export type PriceMode = 'per-unit' | 'per-sqft' | 'per-cuft';
 
-export interface Point {
-  x: number;
-  y: number;
-}
+export interface Point { x: number; y: number; }
 
-export interface ScaleConfig {
-  pixelsPerFoot: number;
-  label: string;
-}
+export interface ScaleConfig { pixelsPerFoot: number; label: string; }
 
-export interface UploadOptions {
-  colorMode: ColorMode;
-  scale: number; // 0.75 | 1 | 1.5
-}
+export interface UploadOptions { colorMode: ColorMode; scale: number; }
 
 export interface Measurement {
   id: string;
@@ -52,6 +43,7 @@ export interface PlanPage {
   imageDataUrl: string;
   width: number;
   height: number;
+  renderDPI?: number;
   scale: ScaleConfig | null;
   colorMode: ColorMode;
   measurements: Measurement[];
@@ -61,5 +53,30 @@ export interface Project {
   id: string;
   name: string;
   pages: PlanPage[];
+  createdAt: string;
+}
+
+// ── Assemblies ────────────────────────────────────────────────────────────────
+
+export interface AssemblyItem {
+  name: string;
+  type: MeasurementType;
+  trade: TradeCategory;
+  unitCost: number;
+  unit: string;
+  priceMode?: PriceMode;
+  formula?: string;
+  color: string;
+  height?: number;
+}
+
+export type AssemblyCategory = 'area' | 'linear' | 'count' | 'mixed';
+
+export interface Assembly {
+  id: string;
+  name: string;
+  description?: string;
+  category: AssemblyCategory;
+  items: AssemblyItem[];
   createdAt: string;
 }
