@@ -337,21 +337,33 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     const b = parseInt(m.color.slice(5, 7), 16);
 
     if (m.type === 'count') {
-      // Show number within the session measurement (pts index + 1)
-      return pts.map((pt, i) => (
-        <Group key={`${m.id}-${i}`} x={pt.x} y={pt.y}
-          onClick={(e) => handleMeasurementClick(m.id, e)}
-          onContextMenu={(e) => handleCountRightClick(m.id, e)}
-          onMouseEnter={() => setHoveredId(m.id)}
-          onMouseLeave={() => setHoveredId(null)}
-        >
-          <Circle radius={12} fill={m.color}
-            stroke={isSelected ? '#fff' : 'transparent'} strokeWidth={2}
-            shadowBlur={m.id === hoveredId ? 6 : 0} />
-          <Text text={String(i + 1)} fontSize={10} fill="#fff" fontStyle="bold"
-            align="center" verticalAlign="middle" width={24} height={24} offsetX={12} offsetY={12} />
-        </Group>
-      ));
+      const total = pts.length;
+      return pts.map((pt, i) => {
+        const isLast = i === total - 1;
+        const totalLabel = `×${total}`;
+        const labelW = totalLabel.length * 6 + 10;
+        return (
+          <Group key={`${m.id}-${i}`} x={pt.x} y={pt.y}
+            onClick={(e) => handleMeasurementClick(m.id, e)}
+            onContextMenu={(e) => handleCountRightClick(m.id, e)}
+            onMouseEnter={() => setHoveredId(m.id)}
+            onMouseLeave={() => setHoveredId(null)}
+          >
+            <Circle radius={12} fill={m.color}
+              stroke={isSelected ? '#fff' : 'transparent'} strokeWidth={2}
+              shadowBlur={m.id === hoveredId ? 6 : 0} />
+            <Text text={String(i + 1)} fontSize={10} fill="#fff" fontStyle="bold"
+              align="center" verticalAlign="middle" width={24} height={24} offsetX={12} offsetY={12} />
+            {/* Running total badge on the most recently placed dot */}
+            {isLast && total > 1 && (
+              <Group x={14} y={-18}>
+                <Rect x={-2} y={-9} width={labelW} height={15} fill={m.color} cornerRadius={8} opacity={0.9} />
+                <Text text={totalLabel} fontSize={9} fill="#fff" fontStyle="bold" x={3} y={-8} />
+              </Group>
+            )}
+          </Group>
+        );
+      });
     }
 
     if (m.type === 'linear') {

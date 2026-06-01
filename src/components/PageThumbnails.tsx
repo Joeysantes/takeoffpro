@@ -1,18 +1,25 @@
 import { useState } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
 
+const TYPE_LABEL: Record<string, string> = {
+  count:  'counting',
+  linear: 'linear',
+  area:   'area',
+};
+
 export default function PageThumbnails() {
   const {
     project, currentPageIndex, setCurrentPage, renamePage,
     activeSession, continueSessionOnPage, stopSession,
   } = useTakeoffStore();
-  const activeCountSession = activeSession; // for display
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
   const [pendingPageChange, setPendingPageChange] = useState<number | null>(null);
 
   if (!project) return null;
+
+  const typeLabel = activeSession ? (TYPE_LABEL[activeSession.type] ?? activeSession.type) : '';
 
   function startEdit(pageIndex: number, currentName: string) {
     setEditingIndex(pageIndex);
@@ -26,21 +33,20 @@ export default function PageThumbnails() {
 
   function handlePageClick(pageIndex: number) {
     if (pageIndex === currentPageIndex) return;
-    if (activeCountSession) {
-      // Ask user if they want to continue count on new page
+    if (activeSession) {
       setPendingPageChange(pageIndex);
     } else {
       setCurrentPage(pageIndex);
     }
   }
 
-  function handleContinueCount() {
+  function handleContinue() {
     if (pendingPageChange === null) return;
     continueSessionOnPage(pendingPageChange);
     setPendingPageChange(null);
   }
 
-  function handleStopCount() {
+  function handleStop() {
     if (pendingPageChange === null) return;
     stopSession();
     setCurrentPage(pendingPageChange);
@@ -53,26 +59,31 @@ export default function PageThumbnails() {
     setPendingPageChange(null);
   }
 
+  const pendingPageName = pendingPageChange !== null
+    ? (project.pages.find((p) => p.pageIndex === pendingPageChange)?.name ?? `Page ${pendingPageChange + 1}`)
+    : '';
+
   return (
     <div className="flex flex-col gap-2 p-2 relative">
-      {/* Page change prompt when count session is active */}
-      {pendingPageChange !== null && activeCountSession && (
-        <div className="absolute inset-0 bg-white/95 z-10 flex flex-col items-center justify-center p-3 gap-2 rounded-lg border border-blue-200 shadow-lg">
-          <p className="text-xs font-semibold text-zinc-800 text-center">
-            Continue counting <span className="text-blue-600">"{activeCountSession.name}"</span> on{' '}
-            {project.pages.find((p) => p.pageIndex === pendingPageChange)?.name ?? `Page ${pendingPageChange + 1}`}?
+      {/* Page change prompt when any session is active */}
+      {pendingPageChange !== null && activeSession && (
+        <div className="absolute inset-0 bg-white/97 z-10 flex flex-col items-center justify-center p-3 gap-2 rounded-lg border border-blue-200 shadow-lg">
+          <p className="text-xs font-semibold text-zinc-800 text-center leading-relaxed">
+            Continue {typeLabel}{' '}
+            <span className="text-blue-600">"{activeSession.name}"</span>
+            <br />on <span className="text-zinc-600">{pendingPageName}</span>?
           </p>
           <button
             className="w-full py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium"
-            onClick={handleContinueCount}
+            onClick={handleContinue}
           >
-            Continue counting here
+            Continue {typeLabel} here
           </button>
           <button
             className="w-full py-1.5 text-xs rounded-lg border border-zinc-300 hover:bg-zinc-50 text-zinc-700"
-            onClick={handleStopCount}
+            onClick={handleStop}
           >
-            Stop count, go to page
+            Stop &amp; go to page
           </button>
           <button
             className="w-full py-1.5 text-xs text-zinc-400 hover:text-zinc-600"
