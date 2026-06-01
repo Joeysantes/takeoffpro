@@ -7,13 +7,22 @@ import type {
 } from '../types';
 import { getNextColor } from '../utils/measurementUtils';
 
-export interface CountSession {
-  measurementId: string | null; // null = not yet created on this page
+export interface MeasurementSession {
+  type: 'linear' | 'area' | 'count';
   name: string;
   trade: TradeCategory;
   color: string;
   unitCost: number;
+  priceMode?: string;
+  formula?: string;
+  height?: number;
+  drawCount: number; // how many measurements drawn so far this session
+  // count-only: track the active measurement on the current page
+  countMeasurementId?: string | null;
 }
+
+// Legacy alias kept so PageThumbnails compiles
+export type CountSession = MeasurementSession;
 
 interface TakeoffState {
   project: Project | null;
@@ -29,7 +38,7 @@ interface TakeoffState {
   dimensionResult: number | null;
   pendingPresetLabel: string | null;
   hiddenTrades: TradeCategory[];
-  activeCountSession: CountSession | null;
+  activeSession: MeasurementSession | null;
 
   setProject: (project: Project | null) => void;
   setCurrentPage: (index: number) => void;
@@ -54,8 +63,14 @@ interface TakeoffState {
   setPendingPreset: (label: string | null) => void;
   toggleTradeVisibility: (trade: TradeCategory) => void;
   setHiddenTrades: (trades: TradeCategory[]) => void;
-  startCountSession: (session: CountSession) => void;
+  startSession: (session: MeasurementSession) => void;
+  bumpSessionCount: () => void;
   addCountPoint: (point: Point, pageIndex: number) => void;
+  continueSessionOnPage: (pageIndex: number) => void;
+  stopSession: () => void;
+  // Legacy aliases
+  activeCountSession: MeasurementSession | null;
+  startCountSession: (s: MeasurementSession) => void;
   continueCountOnPage: (pageIndex: number) => void;
   stopCountSession: () => void;
 }
@@ -79,10 +94,10 @@ export const useTakeoffStore = create<TakeoffState>()(
       dimensionResult: null,
       pendingPresetLabel: null,
       hiddenTrades: [],
-      activeCountSession: null,
+      activeSession: null,
 
       setProject: (project) =>
-        set({ project, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan', hiddenTrades: [], activeCountSession: null }),
+        set({ project, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan', hiddenTrades: [], activeSession: null }),
 
       setCurrentPage: (index) => set({ currentPageIndex: index, selectedMeasurementId: null }),
 
@@ -244,50 +259,45 @@ export const useTakeoffStore = create<TakeoffState>()(
 
       setHiddenTrades: (trades) => set({ hiddenTrades: trades }),
 
-      startCountSession: (session) =>
-        set({ activeCountSession: session, activeTool: 'count' }),
+      startSession: (session) =>
+        set({ activeSession: session, activeTool: session.type as ActiveTool }),
+
+      bumpSessionCount: () =>
+        set((state) => state.activeSession
+          ? { activeSession: { ...state.activeSession, drawCount: state.activeSession.drawCount + 1 } }
+          : state),
 
       addCountPoint: (point, pageIndex) =>
         set((state) => {
-          if (!state.project || !state.activeCountSession) return state;
-          const session = state.activeCountSession;
+          if (!state.project || !state.activeSession || state.activeSession.type !== 'count') return state;
+          const session = state.activeSession;
 
-          // If no measurement yet on this page, create one
-          if (!session.measurementId) {
+          if (!session.countMeasurementId) {
             const newId = uuidv4();
             const newMeasurement: Measurement = {
-              id: newId,
-              type: 'count',
-              name: session.name,
-              trade: session.trade,
-              color: session.color,
-              points: [point],
-              value: 1,
-              unit: 'ea',
-              unitCost: session.unitCost,
-              visible: true,
-              pageIndex,
+              id: newId, type: 'count',
+              name: session.name, trade: session.trade, color: session.color,
+              points: [point], value: 1, unit: 'ea', unitCost: session.unitCost,
+              visible: true, pageIndex,
             };
             return {
               project: {
                 ...state.project,
                 pages: updatePage(state.project.pages, pageIndex, (p) => ({
-                  ...p,
-                  measurements: [...p.measurements, newMeasurement],
+                  ...p, measurements: [...p.measurements, newMeasurement],
                 })),
               },
-              activeCountSession: { ...session, measurementId: newId },
+              activeSession: { ...session, countMeasurementId: newId },
             };
           }
 
-          // Append point to existing measurement on this page
           return {
             project: {
               ...state.project,
               pages: state.project.pages.map((p) => ({
                 ...p,
                 measurements: p.measurements.map((m) =>
-                  m.id === session.measurementId
+                  m.id === session.countMeasurementId
                     ? { ...m, points: [...m.points, point], value: m.points.length + 1 }
                     : m
                 ),
@@ -296,19 +306,28 @@ export const useTakeoffStore = create<TakeoffState>()(
           };
         }),
 
-      continueCountOnPage: (pageIndex) =>
+      continueSessionOnPage: (pageIndex) =>
         set((state) => {
-          if (!state.activeCountSession) return state;
-          // Reset measurementId so next click creates fresh measurement on new page
+          if (!state.activeSession) return state;
           return {
-            activeCountSession: { ...state.activeCountSession, measurementId: null },
+            activeSession: { ...state.activeSession, countMeasurementId: null },
             currentPageIndex: pageIndex,
             selectedMeasurementId: null,
           };
         }),
 
-      stopCountSession: () =>
-        set({ activeCountSession: null, activeTool: 'select' }),
+      stopSession: () => set({ activeSession: null, activeTool: 'select' }),
+
+      // Legacy aliases (used by PageThumbnails)
+      activeCountSession: null,
+      startCountSession: (s) => set({ activeSession: s, activeTool: 'count' as ActiveTool }),
+      continueCountOnPage: (pageIndex) =>
+        set((state) => ({
+          activeSession: state.activeSession ? { ...state.activeSession, countMeasurementId: null } : null,
+          currentPageIndex: pageIndex,
+          selectedMeasurementId: null,
+        })),
+      stopCountSession: () => set({ activeSession: null, activeTool: 'select' as ActiveTool }),
     }),
     { name: 'takeoff-pro' }
   )

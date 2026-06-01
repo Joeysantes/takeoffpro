@@ -4,8 +4,9 @@ import { useTakeoffStore } from '../store/takeoffStore';
 export default function PageThumbnails() {
   const {
     project, currentPageIndex, setCurrentPage, renamePage,
-    activeCountSession, continueCountOnPage, stopCountSession,
+    activeSession, continueSessionOnPage, stopSession,
   } = useTakeoffStore();
+  const activeCountSession = activeSession; // for display
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
@@ -35,13 +36,13 @@ export default function PageThumbnails() {
 
   function handleContinueCount() {
     if (pendingPageChange === null) return;
-    continueCountOnPage(pendingPageChange);
+    continueSessionOnPage(pendingPageChange);
     setPendingPageChange(null);
   }
 
   function handleStopCount() {
     if (pendingPageChange === null) return;
-    stopCountSession();
+    stopSession();
     setCurrentPage(pendingPageChange);
     setPendingPageChange(null);
   }

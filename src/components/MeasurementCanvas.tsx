@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Line, Circle, Text, Group, Rect } from 'react-konva';
 import type Konva from 'konva';
 import { v4 as uuidv4 } from 'uuid';
 import { useTakeoffStore } from '../store/takeoffStore';
-import type { Measurement, Point } from '../types';
+import type { Measurement, Point, TradeCategory, PriceMode } from '../types';
 import {
   pixelDistance,
   polylineLength,
@@ -14,67 +14,42 @@ import {
   getNextColor,
 } from '../utils/measurementUtils';
 
-interface Props {
-  width: number;
-  height: number;
-  pageIndex: number;
-}
+interface Props { width: number; height: number; pageIndex: number; }
+interface ContextMenu { x: number; y: number; visible: boolean; }
+interface PendingFinish { type: 'linear' | 'area'; lastPoint: Point; x: number; y: number; }
 
-interface ContextMenu {
-  x: number;
-  y: number;
-  visible: boolean;
-}
+function toDisplay(p: Point, zoom: number): Point { return { x: p.x * zoom, y: p.y * zoom }; }
+function toStore(p: Point, zoom: number): Point { return { x: p.x / zoom, y: p.y / zoom }; }
+function countByType(ms: Measurement[], t: string) { return ms.filter((m) => m.type === t).length; }
 
-interface PendingFinish {
-  type: 'linear' | 'area';
-  lastPoint: Point; // screen coords
-  x: number;
-  y: number;
-}
-
-function toDisplay(p: Point, zoom: number): Point {
-  return { x: p.x * zoom, y: p.y * zoom };
-}
-
-function toStore(p: Point, zoom: number): Point {
-  return { x: p.x / zoom, y: p.y / zoom };
-}
-
-function countByType(measurements: Measurement[], type: string): number {
-  return measurements.filter((m) => m.type === type).length;
-}
-
-function computeValue(points: Point[], type: string, scale: { pixelsPerFoot: number } | null) {
+function computeValue(pts: Point[], type: string, scale: { pixelsPerFoot: number } | null) {
   if (type === 'linear') {
-    const px = polylineLength(points);
+    const px = polylineLength(pts);
     return scale ? { value: pixelsToFeet(px, scale.pixelsPerFoot), unit: 'ft' } : { value: px, unit: 'px' };
   }
   if (type === 'area') {
-    const sqPx = polygonArea(points);
-    return scale
-      ? { value: pixelsToSqFt(sqPx, scale.pixelsPerFoot), unit: 'sq ft' }
-      : { value: sqPx, unit: 'sq px' };
+    const sqPx = polygonArea(pts);
+    return scale ? { value: pixelsToSqFt(sqPx, scale.pixelsPerFoot), unit: 'sq ft' } : { value: sqPx, unit: 'sq px' };
   }
   return { value: 1, unit: 'ea' };
 }
 
 function liveDist(p1: Point, p2: Point, scale: { pixelsPerFoot: number } | null): string {
   const px = pixelDistance(p1, p2);
-  if (scale) return `${pixelsToFeet(px, scale.pixelsPerFoot).toFixed(2)} ft`;
-  return `${px.toFixed(0)} px`;
+  return scale ? `${pixelsToFeet(px, scale.pixelsPerFoot).toFixed(2)} ft` : `${px.toFixed(0)} px`;
 }
 
 export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
+  const store = useTakeoffStore();
+  // Use a ref to always have fresh store values inside event handlers — fixes stale closure
+  const storeRef = useRef(store);
+  storeRef.current = store;
+
   const {
     project, zoom, activeTool, selectedMeasurementId,
     isCalibrating, isDimensioning, calibrationPoints, dimensionPoints,
-    hiddenTrades, activeCountSession,
-    addMeasurement, deleteMeasurement, selectMeasurement,
-    setCalibrationPoints, setDimensionPoints, setDimensionResult,
-    clearDimension, resetCalibration, setActiveTool,
-    addCountPoint, stopCountSession,
-  } = useTakeoffStore();
+    hiddenTrades, activeSession,
+  } = store;
 
   const page = project?.pages[pageIndex];
   const measurements = page?.measurements ?? [];
@@ -87,261 +62,274 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ x: 0, y: 0, visible: false });
   const [pendingFinish, setPendingFinish] = useState<PendingFinish | null>(null);
-  const [showCountSetup, setShowCountSetup] = useState(false);
-  const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
-  const [assemblyPreFill, setAssemblyPreFill] = useState<{
-    name?: string; trade?: string; unitCost?: number; priceMode?: string; formula?: string; height?: number;
-  } | null>(null);
+  const [showSessionSetup, setShowSessionSetup] = useState(false);
+  const [sessionToolType, setSessionToolType] = useState<'linear' | 'area' | 'count'>('count');
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Use refs for in-progress and assemblyPreFill so handlers always see latest value
+  const inProgressRef = useRef<Point[]>([]);
+  const mousePosRef = useRef<Point | null>(null);
+  inProgressRef.current = inProgress;
+  mousePosRef.current = mousePos;
 
   const [ScaleModalComp, setScaleModalComp] = useState<React.ComponentType<{
     pixelDist: number; pageIndex: number; onClose: () => void;
   }> | null>(null);
-  const [CountSetupComp, setCountSetupComp] = useState<React.ComponentType<{
-    existingCount: number; onClose: () => void;
-  }> | null>(null);
-  const [AssemblyPickerComp, setAssemblyPickerComp] = useState<React.ComponentType<{
-    toolType: import('../types').MeasurementType;
-    onApply: (p: { name: string; trade: import('../types').TradeCategory; unitCost: number; priceMode?: import('../types').PriceMode; formula?: string; height?: number }) => void;
-    onSkip: () => void;
+  const [SessionSetupComp, setSessionSetupComp] = useState<React.ComponentType<{
+    toolType: 'linear' | 'area' | 'count'; existingCount: number; onClose: () => void;
   }> | null>(null);
 
   useEffect(() => {
     import('./ScaleModal').then((m) => setScaleModalComp(() => m.default));
-    import('./CountSessionSetup').then((m) => setCountSetupComp(() => m.default));
-    import('./AssemblyPicker').then((m) => setAssemblyPickerComp(() => m.default));
+    import('./MeasurementSessionSetup').then((m) => setSessionSetupComp(() => m.default));
   }, []);
 
-  // Reset in-progress when tool changes
+  // Reset in-progress when tool changes (but not if a session is active)
   useEffect(() => {
-    setInProgress([]);
-    setMousePos(null);
-    setPendingFinish(null);
+    if (!storeRef.current.activeSession) {
+      setInProgress([]);
+      setMousePos(null);
+      setPendingFinish(null);
+    }
   }, [activeTool]);
 
-  // Keyboard handler
+  // Keyboard handler — uses storeRef so always fresh
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.code === 'Space') return;
+      const s = storeRef.current;
       if (e.key === 'Escape') {
-        if (isCalibrating) resetCalibration();
-        if (isDimensioning) clearDimension();
+        if (s.isCalibrating) s.resetCalibration();
+        if (s.isDimensioning) s.clearDimension();
+        if (s.activeSession) s.stopSession();
         setInProgress([]);
         setMousePos(null);
         setPendingFinish(null);
         setContextMenu({ x: 0, y: 0, visible: false });
+        setShowSessionSetup(false);
+        return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const el = document.activeElement;
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
-        if (selectedMeasurementId) deleteMeasurement(selectedMeasurementId);
+        if (s.selectedMeasurementId) s.deleteMeasurement(s.selectedMeasurementId);
+        return;
       }
-      // Tool shortcuts
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-        const map: Record<string, typeof activeTool> = { s: 'select', l: 'linear', a: 'area', c: 'count', d: 'dimension' };
+        const map: Record<string, typeof s.activeTool> = { s: 'select', l: 'linear', a: 'area', c: 'count', d: 'dimension' };
         const t = map[e.key.toLowerCase()];
-        if (t) setActiveTool(t);
+        if (t) s.setActiveTool(t);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isCalibrating, isDimensioning, selectedMeasurementId, activeTool,
-      resetCalibration, clearDimension, deleteMeasurement, setActiveTool]);
+  }, []); // no deps — always uses storeRef.current
 
-  // Auto-dismiss pending finish bar after 4s
+  // Auto-dismiss pending finish bar after 5s
   useEffect(() => {
     if (pendingFinish) {
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
       pendingTimerRef.current = setTimeout(() => {
         setPendingFinish(null);
-        setActiveTool('select');
-      }, 4000);
+        // Only reset tool if no active session
+        if (!storeRef.current.activeSession) storeRef.current.setActiveTool('select');
+      }, 5000);
     }
     return () => { if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current); };
-  }, [pendingFinish, setActiveTool]);
+  }, [pendingFinish]);
 
-  const getPos = useCallback((stage: Konva.Stage): Point => {
+  function getPos(stage: Konva.Stage): Point {
     return stage.getPointerPosition() ?? { x: 0, y: 0 };
-  }, []);
+  }
 
-  const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    const pos = getPos(e.target.getStage()!);
-    setMousePos(pos);
-  }, [getPos]);
+  function handleMouseMove(e: Konva.KonvaEventObject<MouseEvent>) {
+    setMousePos(getPos(e.target.getStage()!));
+  }
 
-  const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+  // Main click — uses storeRef to avoid stale closures
+  function handleClick(e: Konva.KonvaEventObject<MouseEvent>) {
     if (e.evt.button !== 0) return;
     setContextMenu({ x: 0, y: 0, visible: false });
 
+    const s = storeRef.current;
     const pos = getPos(e.target.getStage()!);
-    const stored = toStore(pos, zoom);
+    const stored = toStore(pos, s.zoom);
+    const currentScale = s.project?.pages[pageIndex]?.scale ?? null;
 
     // Calibrate
-    if (isCalibrating) {
-      const newPts = [...calibrationPoints, stored];
-      setCalibrationPoints(newPts);
+    if (s.isCalibrating) {
+      const newPts = [...s.calibrationPoints, stored];
+      s.setCalibrationPoints(newPts);
       if (newPts.length === 2) {
-        const p1d = toDisplay(newPts[0], zoom);
-        const p2d = toDisplay(newPts[1], zoom);
+        const p1d = toDisplay(newPts[0], s.zoom);
+        const p2d = toDisplay(newPts[1], s.zoom);
         setScalePixelDist(pixelDistance(p1d, p2d));
         setShowScaleModal(true);
       }
       return;
     }
 
-    // Dimension tool
-    if (isDimensioning) {
-      const newPts = [...dimensionPoints, stored];
-      setDimensionPoints(newPts);
+    // Dimension
+    if (s.isDimensioning) {
+      const newPts = [...s.dimensionPoints, stored];
+      s.setDimensionPoints(newPts);
       if (newPts.length >= 2) {
-        const p1d = toDisplay(newPts[0], zoom);
-        const p2d = toDisplay(newPts[1], zoom);
+        const p1d = toDisplay(newPts[0], s.zoom);
+        const p2d = toDisplay(newPts[1], s.zoom);
         const dist = pixelDistance(p1d, p2d);
-        setDimensionResult(scale ? pixelsToFeet(dist, scale.pixelsPerFoot) : dist);
-        // Reset to single-point after locking; next click starts fresh
-        setTimeout(() => setDimensionPoints([]), 2000);
+        s.setDimensionResult(currentScale ? pixelsToFeet(dist, currentScale.pixelsPerFoot) : dist);
+        setTimeout(() => s.setDimensionPoints([]), 2000);
       }
       return;
     }
 
-    if (activeTool === 'select') { selectMeasurement(null); return; }
+    if (s.activeTool === 'select') { s.selectMeasurement(null); return; }
 
-    if (activeTool === 'count') {
-      if (!activeCountSession) {
-        // No session yet — open setup dialog
-        setShowCountSetup(true);
+    // COUNT
+    if (s.activeTool === 'count') {
+      if (!s.activeSession) {
+        setSessionToolType('count');
+        setShowSessionSetup(true);
         return;
       }
-      // Accumulate into the active count session
-      addCountPoint(stored, pageIndex);
+      s.addCountPoint(stored, pageIndex);
       return;
     }
 
-    if (activeTool === 'linear') {
-      // On first point, offer assembly picker
-      if (inProgress.length === 0 && !assemblyPreFill) {
-        setShowAssemblyPicker(true);
+    // LINEAR
+    if (s.activeTool === 'linear') {
+      const cur = inProgressRef.current;
+      if (cur.length === 0 && !s.activeSession) {
+        // Offer session setup on first point
+        setSessionToolType('linear');
+        setShowSessionSetup(true);
       }
       setInProgress((prev) => [...prev, stored]);
       return;
     }
 
-    if (activeTool === 'area') {
-      if (inProgress.length >= 3) {
-        const firstDisp = toDisplay(inProgress[0], zoom);
-        if (pixelDistance(pos, firstDisp) < 10) { finishArea(inProgress, pos); return; }
+    // AREA
+    if (s.activeTool === 'area') {
+      const cur = inProgressRef.current;
+      if (cur.length >= 3) {
+        const firstDisp = toDisplay(cur[0], s.zoom);
+        if (pixelDistance(pos, firstDisp) < 10) {
+          finishArea(cur, pos);
+          return;
+        }
       }
-      if (inProgress.length === 0 && !assemblyPreFill) {
-        setShowAssemblyPicker(true);
+      if (cur.length === 0 && !s.activeSession) {
+        setSessionToolType('area');
+        setShowSessionSetup(true);
       }
       setInProgress((prev) => [...prev, stored]);
     }
-  }, [activeTool, inProgress, isCalibrating, isDimensioning, calibrationPoints, dimensionPoints,
-      measurements, zoom, pageIndex, scale, getPos, addMeasurement, selectMeasurement,
-      setCalibrationPoints, setDimensionPoints, setDimensionResult]);
+  }
 
-  const handleDblClick = useCallback((_e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (activeTool === 'linear' && inProgress.length >= 2) {
-      const pts = inProgress.length > 1 ? inProgress.slice(0, -1) : inProgress;
-      finishLinear(pts.length >= 2 ? pts : inProgress, mousePos ?? toDisplay(inProgress[inProgress.length - 1], zoom));
+  function handleDblClick(_e: Konva.KonvaEventObject<MouseEvent>) {
+    const s = storeRef.current;
+    const cur = inProgressRef.current;
+    const mp = mousePosRef.current;
+    if (s.activeTool === 'linear' && cur.length >= 2) {
+      const pts = cur.length > 1 ? cur.slice(0, -1) : cur;
+      finishLinear(pts.length >= 2 ? pts : cur, mp ?? toDisplay(cur[cur.length - 1], s.zoom));
       return;
     }
-    if (activeTool === 'area' && inProgress.length >= 3) {
-      finishArea(inProgress, mousePos ?? toDisplay(inProgress[inProgress.length - 1], zoom));
+    if (s.activeTool === 'area' && cur.length >= 3) {
+      finishArea(cur, mp ?? toDisplay(cur[cur.length - 1], s.zoom));
     }
-  }, [activeTool, inProgress, mousePos, zoom]);
+  }
 
-  const handleContextMenu = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+  function handleContextMenu(e: Konva.KonvaEventObject<MouseEvent>) {
     e.evt.preventDefault();
     const pos = getPos(e.target.getStage()!);
-    // Only show if clicking empty space (not on a measurement shape)
     if (e.target === e.target.getStage() || e.target.getParent() === e.target.getLayer()) {
       setContextMenu({ x: pos.x, y: pos.y, visible: true });
     }
-  }, [getPos]);
+  }
 
   function finishLinear(points: Point[], lastScreenPos: Point) {
     if (points.length < 2) { setInProgress([]); return; }
-    const { value, unit } = computeValue(points, 'linear', scale);
-    const pf = assemblyPreFill;
-    addMeasurement({
+    const s = storeRef.current;
+    const currentMs = s.project?.pages[pageIndex]?.measurements ?? [];
+    const sess = s.activeSession;
+    const { value, unit } = computeValue(points, 'linear', s.project?.pages[pageIndex]?.scale ?? null);
+    const drawN = (sess?.drawCount ?? 0) + 1;
+    s.addMeasurement({
       id: uuidv4(), type: 'linear',
-      name: pf?.name || `Linear ${countByType(measurements, 'linear') + 1}`,
-      trade: (pf?.trade as import('../types').TradeCategory) || 'General',
-      color: getNextColor(measurements.length),
+      name: sess ? `${sess.name} ${drawN}` : `Linear ${countByType(currentMs, 'linear') + 1}`,
+      trade: (sess?.trade ?? 'General') as TradeCategory,
+      color: sess?.color ?? getNextColor(currentMs.length),
       points, value, unit,
-      unitCost: pf?.unitCost ?? 0,
-      priceMode: pf?.priceMode as import('../types').PriceMode | undefined,
-      formula: pf?.formula,
-      height: pf?.height,
+      unitCost: sess?.unitCost ?? 0,
+      priceMode: sess?.priceMode as PriceMode | undefined,
+      formula: sess?.formula,
       visible: true, pageIndex,
     });
+    if (sess) s.bumpSessionCount();
     setInProgress([]);
-    setAssemblyPreFill(null);
-    setPendingFinish({ type: 'linear', lastPoint: toStore(lastScreenPos, zoom), x: lastScreenPos.x, y: lastScreenPos.y });
+    setPendingFinish({ type: 'linear', lastPoint: toStore(lastScreenPos, s.zoom), x: lastScreenPos.x, y: lastScreenPos.y });
   }
 
   function finishArea(points: Point[], lastScreenPos: Point) {
     if (points.length < 3) { setInProgress([]); return; }
-    const { value, unit } = computeValue(points, 'area', scale);
-    const pf = assemblyPreFill;
-    addMeasurement({
+    const s = storeRef.current;
+    const currentMs = s.project?.pages[pageIndex]?.measurements ?? [];
+    const sess = s.activeSession;
+    const { value, unit } = computeValue(points, 'area', s.project?.pages[pageIndex]?.scale ?? null);
+    const drawN = (sess?.drawCount ?? 0) + 1;
+    s.addMeasurement({
       id: uuidv4(), type: 'area',
-      name: pf?.name || `Area ${countByType(measurements, 'area') + 1}`,
-      trade: (pf?.trade as import('../types').TradeCategory) || 'General',
-      color: getNextColor(measurements.length),
+      name: sess ? `${sess.name} ${drawN}` : `Area ${countByType(currentMs, 'area') + 1}`,
+      trade: (sess?.trade ?? 'General') as TradeCategory,
+      color: sess?.color ?? getNextColor(currentMs.length),
       points, value, unit,
-      unitCost: pf?.unitCost ?? 0,
-      priceMode: pf?.priceMode as import('../types').PriceMode | undefined,
-      formula: pf?.formula,
-      height: pf?.height,
+      unitCost: sess?.unitCost ?? 0,
+      priceMode: sess?.priceMode as PriceMode | undefined,
+      formula: sess?.formula,
       visible: true, pageIndex,
     });
+    if (sess) s.bumpSessionCount();
     setInProgress([]);
-    setAssemblyPreFill(null);
-    setPendingFinish({ type: 'area', lastPoint: toStore(lastScreenPos, zoom), x: lastScreenPos.x, y: lastScreenPos.y });
+    setPendingFinish({ type: 'area', lastPoint: toStore(lastScreenPos, s.zoom), x: lastScreenPos.x, y: lastScreenPos.y });
   }
 
   function handleContinue() {
     if (!pendingFinish) return;
     if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
     setPendingFinish(null);
-    setActiveTool(pendingFinish.type);
+    storeRef.current.setActiveTool(pendingFinish.type);
     if (pendingFinish.type === 'linear') {
       setInProgress([pendingFinish.lastPoint]);
     }
-    // area continues fresh
   }
 
   function handleDone() {
     if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
     setPendingFinish(null);
-    setActiveTool('select');
+    const s = storeRef.current;
+    if (!s.activeSession) s.setActiveTool('select');
   }
 
-  const handleMeasurementClick = useCallback((id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
+  function handleMeasurementClick(id: string, e: Konva.KonvaEventObject<MouseEvent>) {
     e.cancelBubble = true;
-    if (activeTool === 'select') selectMeasurement(id);
-  }, [activeTool, selectMeasurement]);
+    if (storeRef.current.activeTool === 'select') storeRef.current.selectMeasurement(id);
+  }
 
-  const handleCountRightClick = useCallback((id: string, e: Konva.KonvaEventObject<MouseEvent>) => {
+  function handleCountRightClick(id: string, e: Konva.KonvaEventObject<MouseEvent>) {
     e.evt.preventDefault();
-    deleteMeasurement(id);
-  }, [deleteMeasurement]);
+    storeRef.current.deleteMeasurement(id);
+  }
 
   const lastMeasurement = measurements.length > 0 ? measurements[measurements.length - 1] : null;
-
   const cursor = (isCalibrating || isDimensioning || activeTool === 'linear' || activeTool === 'area' || activeTool === 'count')
     ? 'crosshair' : 'default';
 
-  function displayPts(pts: Point[]) {
-    return pts.flatMap((p) => [p.x * zoom, p.y * zoom]);
-  }
+  function displayPts(pts: Point[]) { return pts.flatMap((p) => [p.x * zoom, p.y * zoom]); }
 
   function renderMeasurement(m: Measurement) {
-    if (!m.visible) return null;
-    if (hiddenTrades.includes(m.trade)) return null;
+    if (!m.visible || hiddenTrades.includes(m.trade)) return null;
     const isSelected = m.id === selectedMeasurementId;
     const pts = m.points.map((p) => toDisplay(p, zoom));
     const r = parseInt(m.color.slice(1, 3), 16);
@@ -349,9 +337,9 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     const b = parseInt(m.color.slice(5, 7), 16);
 
     if (m.type === 'count') {
-      const idx = measurements.filter((x) => x.type === 'count' && x.id <= m.id).length;
-      return (
-        <Group key={m.id} x={pts[0].x} y={pts[0].y}
+      // Show number within the session measurement (pts index + 1)
+      return pts.map((pt, i) => (
+        <Group key={`${m.id}-${i}`} x={pt.x} y={pt.y}
           onClick={(e) => handleMeasurementClick(m.id, e)}
           onContextMenu={(e) => handleCountRightClick(m.id, e)}
           onMouseEnter={() => setHoveredId(m.id)}
@@ -360,10 +348,10 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
           <Circle radius={12} fill={m.color}
             stroke={isSelected ? '#fff' : 'transparent'} strokeWidth={2}
             shadowBlur={m.id === hoveredId ? 6 : 0} />
-          <Text text={String(idx)} fontSize={10} fill="#fff" fontStyle="bold"
+          <Text text={String(i + 1)} fontSize={10} fill="#fff" fontStyle="bold"
             align="center" verticalAlign="middle" width={24} height={24} offsetX={12} offsetY={12} />
         </Group>
-      );
+      ));
     }
 
     if (m.type === 'linear') {
@@ -413,20 +401,13 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     const pts = inProgress.map((p) => toDisplay(p, zoom));
     const allPts = mousePos ? [...pts, mousePos] : pts;
     const flat = allPts.flatMap((p) => [p.x, p.y]);
-    // Live distance label for last segment
     const lastPt = pts[pts.length - 1];
     const label = lastPt && mousePos ? liveDist(lastPt, mousePos, scale) : '';
     const mid = lastPt && mousePos ? { x: (lastPt.x + mousePos.x) / 2, y: (lastPt.y + mousePos.y) / 2 } : null;
-
     return (
       <>
-        {activeTool === 'linear' && (
-          <Line points={flat} stroke="#2563EB" strokeWidth={2} dash={[6, 3]} opacity={0.8} />
-        )}
-        {activeTool === 'area' && (
-          <Line points={flat} stroke="#2563EB" strokeWidth={2} fill="rgba(37,99,235,0.08)" dash={[6, 3]} />
-        )}
-        {/* Live segment length */}
+        {activeTool === 'linear' && <Line points={flat} stroke="#2563EB" strokeWidth={2} dash={[6, 3]} opacity={0.8} />}
+        {activeTool === 'area' && <Line points={flat} stroke="#2563EB" strokeWidth={2} fill="rgba(37,99,235,0.08)" dash={[6, 3]} />}
         {mid && label && (
           <Group x={mid.x} y={mid.y - 14}>
             <Rect x={-2} y={-9} width={label.length * 5.5 + 8} height={14} fill="#2563EB" cornerRadius={4} opacity={0.9} />
@@ -444,10 +425,7 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     return (
       <>
         {pts.map((p, i) => <Circle key={i} x={p.x} y={p.y} radius={5} fill="#EF4444" />)}
-        {allPts.length >= 2 && (
-          <Line points={allPts.flatMap((p) => [p.x, p.y])} stroke="#EF4444" strokeWidth={2} dash={[6, 3]} />
-        )}
-        {/* Live calibration distance */}
+        {allPts.length >= 2 && <Line points={allPts.flatMap((p) => [p.x, p.y])} stroke="#EF4444" strokeWidth={2} dash={[6, 3]} />}
         {mousePos && pts.length === 1 && (() => {
           const label = liveDist(pts[0], mousePos, scale);
           const mid = { x: (pts[0].x + mousePos.x) / 2, y: (pts[0].y + mousePos.y) / 2 };
@@ -466,22 +444,15 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     if (!isDimensioning) return null;
     const pts = dimensionPoints.map((p) => toDisplay(p, zoom));
     const endPt = pts.length >= 2 ? pts[1] : mousePos;
-    if (!endPt || pts.length === 0) {
-      // No anchor yet — show crosshair hint at cursor
-      return null;
-    }
+    if (!endPt || pts.length === 0) return null;
     const anchor = pts[0];
     const label = liveDist(anchor, endPt, scale);
     const mid = { x: (anchor.x + endPt.x) / 2, y: (anchor.y + endPt.y) / 2 };
-    const locked = pts.length >= 2;
     return (
       <>
         <Circle x={anchor.x} y={anchor.y} radius={5} fill="#16A34A" />
-        {locked && <Circle x={endPt.x} y={endPt.y} radius={5} fill="#16A34A" />}
-        <Line
-          points={[anchor.x, anchor.y, endPt.x, endPt.y]}
-          stroke="#16A34A" strokeWidth={2} dash={[8, 4]}
-        />
+        {pts.length >= 2 && <Circle x={endPt.x} y={endPt.y} radius={5} fill="#16A34A" />}
+        <Line points={[anchor.x, anchor.y, endPt.x, endPt.y]} stroke="#16A34A" strokeWidth={2} dash={[8, 4]} />
         <Group x={mid.x} y={mid.y - 18}>
           <Rect x={-4} y={-11} width={label.length * 7 + 14} height={18} fill="#16A34A" cornerRadius={5} />
           <Text text={label} fontSize={11} fill="#fff" fontStyle="bold" x={3} y={-9} />
@@ -496,17 +467,22 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     if (!m) return null;
     return (
       <Group x={mousePos.x + 12} y={mousePos.y - 32}>
-        <Rect fill="rgba(0,0,0,0.78)" cornerRadius={4} width={140} height={34} />
+        <Rect fill="rgba(0,0,0,0.78)" cornerRadius={4} width={150} height={34} />
         <Text text={m.name} fill="#fff" fontSize={10} fontStyle="bold" x={7} y={6} />
-        <Text text={`${m.value.toFixed(2)} ${m.unit}`} fill="#d4d4d4" fontSize={9} x={7} y={19} />
+        <Text text={m.type === 'count' ? `${m.value} ea` : `${m.value.toFixed(2)} ${m.unit}`} fill="#d4d4d4" fontSize={9} x={7} y={19} />
       </Group>
     );
   }
 
+  const sessionColor = activeSession?.color ?? '#2563EB';
+  const sessionName = activeSession?.name ?? '';
+  const countM = activeSession?.type === 'count'
+    ? measurements.find((x) => x.id === activeSession.countMeasurementId)
+    : null;
+
   return (
     <>
-      <Stage
-        width={width} height={height}
+      <Stage width={width} height={height}
         style={{ position: 'absolute', top: 0, left: 0, cursor }}
         onMouseMove={handleMouseMove}
         onClick={handleClick}
@@ -522,26 +498,19 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
         </Layer>
       </Stage>
 
-      {/* Pending finish action bar */}
+      {/* Continue / Done bar after finishing a linear or area */}
       {pendingFinish && (
         <div
           className="absolute z-20 flex gap-1 items-center bg-white border border-zinc-300 rounded-lg shadow-lg px-2 py-1.5"
-          style={{
-            left: Math.min(pendingFinish.x + 12, width - 180),
-            top: Math.max(pendingFinish.y - 40, 4),
-          }}
+          style={{ left: Math.min(pendingFinish.x + 12, width - 200), top: Math.max(pendingFinish.y - 40, 4) }}
         >
-          <span className="text-xs text-zinc-500 mr-1">Next:</span>
-          <button
-            className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 font-medium"
-            onClick={handleContinue}
-          >
+          <span className="text-xs text-zinc-500 mr-1">
+            {activeSession ? `${activeSession.name}:` : 'Next:'}
+          </span>
+          <button className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 font-medium" onClick={handleContinue}>
             Continue
           </button>
-          <button
-            className="px-2.5 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700"
-            onClick={handleDone}
-          >
+          <button className="px-2.5 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700" onClick={handleDone}>
             Done
           </button>
         </div>
@@ -549,91 +518,72 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
 
       {/* Right-click context menu */}
       {contextMenu.visible && (
-        <div
-          className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 min-w-[180px]"
+        <div className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 min-w-[190px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseLeave={() => setContextMenu({ x: 0, y: 0, visible: false })}
         >
-          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-700"
-            onClick={() => { setActiveTool('linear'); setContextMenu({ x: 0, y: 0, visible: false }); }}>
-            Start New Linear
-          </button>
-          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-700"
-            onClick={() => { setActiveTool('area'); setContextMenu({ x: 0, y: 0, visible: false }); }}>
-            Start New Area
-          </button>
-          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-700"
-            onClick={() => { setActiveTool('count'); setContextMenu({ x: 0, y: 0, visible: false }); }}>
-            Start New Count
-          </button>
-          {lastMeasurement && lastMeasurement.type !== 'count' && (
+          {(['linear', 'area', 'count'] as const).map((t) => (
+            <button key={t} className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-700 capitalize"
+              onClick={() => { storeRef.current.setActiveTool(t); setContextMenu({ x: 0, y: 0, visible: false }); }}>
+              New {t}
+            </button>
+          ))}
+          {lastMeasurement && (
             <>
               <div className="h-px bg-zinc-100 my-1" />
-              <button
-                className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-blue-600 font-medium"
+              <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-blue-600 font-medium"
                 onClick={() => {
                   const m = lastMeasurement;
-                  setActiveTool(m.type as 'linear' | 'area');
-                  if (m.type === 'linear' && m.points.length > 0) {
+                  storeRef.current.setActiveTool(m.type as 'linear' | 'area' | 'count');
+                  if (m.type === 'linear' && m.points.length > 0)
                     setInProgress([m.points[m.points.length - 1]]);
-                  }
                   setContextMenu({ x: 0, y: 0, visible: false });
-                }}
-              >
+                }}>
                 Continue "{lastMeasurement.name}"
               </button>
             </>
           )}
           <div className="h-px bg-zinc-100 my-1" />
-          <button
-            className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-500"
-            onClick={() => setContextMenu({ x: 0, y: 0, visible: false })}
-          >
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-100 text-zinc-400"
+            onClick={() => setContextMenu({ x: 0, y: 0, visible: false })}>
             Cancel
           </button>
         </div>
       )}
 
+      {/* Scale modal */}
       {showScaleModal && ScaleModalComp && (
-        <ScaleModalComp
-          pixelDist={scalePixelDist}
-          pageIndex={pageIndex}
-          onClose={() => setShowScaleModal(false)}
+        <ScaleModalComp pixelDist={scalePixelDist} pageIndex={pageIndex} onClose={() => setShowScaleModal(false)} />
+      )}
+
+      {/* Session setup (count / linear / area) */}
+      {showSessionSetup && SessionSetupComp && (
+        <SessionSetupComp
+          toolType={sessionToolType}
+          existingCount={countByType(measurements, sessionToolType)}
+          onClose={() => setShowSessionSetup(false)}
         />
       )}
 
-      {/* Assembly picker for linear/area */}
-      {showAssemblyPicker && AssemblyPickerComp && (activeTool === 'linear' || activeTool === 'area') && (
-        <AssemblyPickerComp
-          toolType={activeTool}
-          onApply={(pf) => { setAssemblyPreFill(pf); setShowAssemblyPicker(false); }}
-          onSkip={() => { setAssemblyPreFill(null); setShowAssemblyPicker(false); }}
-        />
-      )}
-
-      {/* Count session setup dialog */}
-      {showCountSetup && CountSetupComp && (
-        <CountSetupComp
-          existingCount={countByType(measurements, 'count')}
-          onClose={() => setShowCountSetup(false)}
-        />
-      )}
-
-      {/* Active count session bar */}
-      {activeCountSession && activeTool === 'count' && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-blue-600 text-white rounded-full px-4 py-2 shadow-lg text-sm font-medium">
+      {/* Active session status bar */}
+      {activeSession && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 text-white rounded-full px-4 py-2 shadow-lg text-sm font-medium"
+          style={{ background: sessionColor }}
+        >
           <div className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
           <span>
-            Counting: <strong>{activeCountSession.name}</strong>
-            {' — '}
-            {(() => {
-              const m = measurements.find((x) => x.id === activeCountSession.measurementId);
-              return m ? <span>{m.value} so far</span> : <span>click to start</span>;
-            })()}
+            {activeSession.type === 'count' ? 'Counting' : activeSession.type === 'linear' ? 'Linear' : 'Area'}:{' '}
+            <strong>{sessionName}</strong>
+            {activeSession.type === 'count' && (
+              <> — {countM ? `${countM.value} so far` : 'click to start'}</>
+            )}
+            {(activeSession.type === 'linear' || activeSession.type === 'area') && activeSession.drawCount > 0 && (
+              <> — {activeSession.drawCount} drawn</>
+            )}
           </span>
           <button
-            className="ml-2 bg-white/20 hover:bg-white/30 rounded-full px-3 py-0.5 text-xs font-semibold transition-colors"
-            onClick={() => stopCountSession()}
+            className="ml-1 bg-white/20 hover:bg-white/40 rounded-full px-3 py-0.5 text-xs font-semibold transition-colors"
+            onClick={() => storeRef.current.stopSession()}
           >
             Stop
           </button>
