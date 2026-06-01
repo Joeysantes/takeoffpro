@@ -69,10 +69,11 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   const {
     project, zoom, activeTool, selectedMeasurementId,
     isCalibrating, isDimensioning, calibrationPoints, dimensionPoints,
-    hiddenTrades,
+    hiddenTrades, activeCountSession,
     addMeasurement, deleteMeasurement, selectMeasurement,
     setCalibrationPoints, setDimensionPoints, setDimensionResult,
     clearDimension, resetCalibration, setActiveTool,
+    addCountPoint, stopCountSession,
   } = useTakeoffStore();
 
   const page = project?.pages[pageIndex];
@@ -86,14 +87,29 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ x: 0, y: 0, visible: false });
   const [pendingFinish, setPendingFinish] = useState<PendingFinish | null>(null);
+  const [showCountSetup, setShowCountSetup] = useState(false);
+  const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
+  const [assemblyPreFill, setAssemblyPreFill] = useState<{
+    name?: string; trade?: string; unitCost?: number; priceMode?: string; formula?: string; height?: number;
+  } | null>(null);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [ScaleModalComp, setScaleModalComp] = useState<React.ComponentType<{
     pixelDist: number; pageIndex: number; onClose: () => void;
   }> | null>(null);
+  const [CountSetupComp, setCountSetupComp] = useState<React.ComponentType<{
+    existingCount: number; onClose: () => void;
+  }> | null>(null);
+  const [AssemblyPickerComp, setAssemblyPickerComp] = useState<React.ComponentType<{
+    toolType: import('../types').MeasurementType;
+    onApply: (p: { name: string; trade: import('../types').TradeCategory; unitCost: number; priceMode?: import('../types').PriceMode; formula?: string; height?: number }) => void;
+    onSkip: () => void;
+  }> | null>(null);
 
   useEffect(() => {
     import('./ScaleModal').then((m) => setScaleModalComp(() => m.default));
+    import('./CountSessionSetup').then((m) => setCountSetupComp(() => m.default));
+    import('./AssemblyPicker').then((m) => setAssemblyPickerComp(() => m.default));
   }, []);
 
   // Reset in-progress when tool changes
@@ -192,16 +208,21 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
     if (activeTool === 'select') { selectMeasurement(null); return; }
 
     if (activeTool === 'count') {
-      addMeasurement({
-        id: uuidv4(), type: 'count',
-        name: `Count ${countByType(measurements, 'count') + 1}`,
-        trade: 'General', color: getNextColor(measurements.length),
-        points: [stored], value: 1, unit: 'ea', unitCost: 0, visible: true, pageIndex,
-      });
+      if (!activeCountSession) {
+        // No session yet — open setup dialog
+        setShowCountSetup(true);
+        return;
+      }
+      // Accumulate into the active count session
+      addCountPoint(stored, pageIndex);
       return;
     }
 
     if (activeTool === 'linear') {
+      // On first point, offer assembly picker
+      if (inProgress.length === 0 && !assemblyPreFill) {
+        setShowAssemblyPicker(true);
+      }
       setInProgress((prev) => [...prev, stored]);
       return;
     }
@@ -210,6 +231,9 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
       if (inProgress.length >= 3) {
         const firstDisp = toDisplay(inProgress[0], zoom);
         if (pixelDistance(pos, firstDisp) < 10) { finishArea(inProgress, pos); return; }
+      }
+      if (inProgress.length === 0 && !assemblyPreFill) {
+        setShowAssemblyPicker(true);
       }
       setInProgress((prev) => [...prev, stored]);
     }
@@ -240,26 +264,42 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
   function finishLinear(points: Point[], lastScreenPos: Point) {
     if (points.length < 2) { setInProgress([]); return; }
     const { value, unit } = computeValue(points, 'linear', scale);
+    const pf = assemblyPreFill;
     addMeasurement({
       id: uuidv4(), type: 'linear',
-      name: `Linear ${countByType(measurements, 'linear') + 1}`,
-      trade: 'General', color: getNextColor(measurements.length),
-      points, value, unit, unitCost: 0, visible: true, pageIndex,
+      name: pf?.name || `Linear ${countByType(measurements, 'linear') + 1}`,
+      trade: (pf?.trade as import('../types').TradeCategory) || 'General',
+      color: getNextColor(measurements.length),
+      points, value, unit,
+      unitCost: pf?.unitCost ?? 0,
+      priceMode: pf?.priceMode as import('../types').PriceMode | undefined,
+      formula: pf?.formula,
+      height: pf?.height,
+      visible: true, pageIndex,
     });
     setInProgress([]);
+    setAssemblyPreFill(null);
     setPendingFinish({ type: 'linear', lastPoint: toStore(lastScreenPos, zoom), x: lastScreenPos.x, y: lastScreenPos.y });
   }
 
   function finishArea(points: Point[], lastScreenPos: Point) {
     if (points.length < 3) { setInProgress([]); return; }
     const { value, unit } = computeValue(points, 'area', scale);
+    const pf = assemblyPreFill;
     addMeasurement({
       id: uuidv4(), type: 'area',
-      name: `Area ${countByType(measurements, 'area') + 1}`,
-      trade: 'General', color: getNextColor(measurements.length),
-      points, value, unit, unitCost: 0, visible: true, pageIndex,
+      name: pf?.name || `Area ${countByType(measurements, 'area') + 1}`,
+      trade: (pf?.trade as import('../types').TradeCategory) || 'General',
+      color: getNextColor(measurements.length),
+      points, value, unit,
+      unitCost: pf?.unitCost ?? 0,
+      priceMode: pf?.priceMode as import('../types').PriceMode | undefined,
+      formula: pf?.formula,
+      height: pf?.height,
+      visible: true, pageIndex,
     });
     setInProgress([]);
+    setAssemblyPreFill(null);
     setPendingFinish({ type: 'area', lastPoint: toStore(lastScreenPos, zoom), x: lastScreenPos.x, y: lastScreenPos.y });
   }
 
@@ -560,6 +600,44 @@ export default function MeasurementCanvas({ width, height, pageIndex }: Props) {
           pageIndex={pageIndex}
           onClose={() => setShowScaleModal(false)}
         />
+      )}
+
+      {/* Assembly picker for linear/area */}
+      {showAssemblyPicker && AssemblyPickerComp && (activeTool === 'linear' || activeTool === 'area') && (
+        <AssemblyPickerComp
+          toolType={activeTool}
+          onApply={(pf) => { setAssemblyPreFill(pf); setShowAssemblyPicker(false); }}
+          onSkip={() => { setAssemblyPreFill(null); setShowAssemblyPicker(false); }}
+        />
+      )}
+
+      {/* Count session setup dialog */}
+      {showCountSetup && CountSetupComp && (
+        <CountSetupComp
+          existingCount={countByType(measurements, 'count')}
+          onClose={() => setShowCountSetup(false)}
+        />
+      )}
+
+      {/* Active count session bar */}
+      {activeCountSession && activeTool === 'count' && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-blue-600 text-white rounded-full px-4 py-2 shadow-lg text-sm font-medium">
+          <div className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+          <span>
+            Counting: <strong>{activeCountSession.name}</strong>
+            {' — '}
+            {(() => {
+              const m = measurements.find((x) => x.id === activeCountSession.measurementId);
+              return m ? <span>{m.value} so far</span> : <span>click to start</span>;
+            })()}
+          </span>
+          <button
+            className="ml-2 bg-white/20 hover:bg-white/30 rounded-full px-3 py-0.5 text-xs font-semibold transition-colors"
+            onClick={() => stopCountSession()}
+          >
+            Stop
+          </button>
+        </div>
       )}
     </>
   );
