@@ -19,9 +19,9 @@ interface TakeoffState {
   zoom: number;
   isCalibrating: boolean;
   calibrationPoints: Point[];
-  isVerifying: boolean;
-  verifyPoints: Point[];
-  verifyResult: number | null;
+  isDimensioning: boolean;
+  dimensionPoints: Point[];
+  dimensionResult: number | null;
 
   setProject: (project: Project | null) => void;
   setCurrentPage: (index: number) => void;
@@ -29,6 +29,7 @@ interface TakeoffState {
   setActiveTab: (tab: AppTab) => void;
   setZoom: (zoom: number) => void;
   setScale: (pageIndex: number, scale: ScaleConfig) => void;
+  setScaleAllPages: (scale: ScaleConfig) => void;
   addMeasurement: (measurement: Measurement) => void;
   updateMeasurement: (id: string, updates: Partial<Measurement>) => void;
   deleteMeasurement: (id: string) => void;
@@ -38,9 +39,9 @@ interface TakeoffState {
   renamePage: (pageIndex: number, name: string) => void;
   renameProject: (name: string) => void;
   addPages: (newPages: PlanPage[]) => void;
-  setVerifyPoints: (points: Point[]) => void;
-  setVerifyResult: (result: number | null) => void;
-  clearVerify: () => void;
+  setDimensionPoints: (points: Point[]) => void;
+  setDimensionResult: (result: number | null) => void;
+  clearDimension: () => void;
 }
 
 const updatePage = (
@@ -60,9 +61,9 @@ export const useTakeoffStore = create<TakeoffState>()(
       zoom: 1,
       isCalibrating: false,
       calibrationPoints: [],
-      isVerifying: false,
-      verifyPoints: [],
-      verifyResult: null,
+      isDimensioning: false,
+      dimensionPoints: [],
+      dimensionResult: null,
 
       setProject: (project) =>
         set({ project, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan' }),
@@ -75,13 +76,12 @@ export const useTakeoffStore = create<TakeoffState>()(
           activeTool: tool,
           isCalibrating: tool === 'calibrate',
           calibrationPoints: [],
-          isVerifying: tool === 'verify',
-          verifyPoints: [],
-          verifyResult: null,
+          isDimensioning: tool === 'dimension',
+          dimensionPoints: [],
+          dimensionResult: null,
         }),
 
       setActiveTab: (tab) => set({ activeTab: tab }),
-
       setZoom: (zoom) => set({ zoom }),
 
       setScale: (pageIndex, scale) =>
@@ -91,6 +91,20 @@ export const useTakeoffStore = create<TakeoffState>()(
             project: {
               ...state.project,
               pages: updatePage(state.project.pages, pageIndex, (p) => ({ ...p, scale })),
+            },
+            isCalibrating: false,
+            calibrationPoints: [],
+            activeTool: 'select',
+          };
+        }),
+
+      setScaleAllPages: (scale) =>
+        set((state) => {
+          if (!state.project) return state;
+          return {
+            project: {
+              ...state.project,
+              pages: state.project.pages.map((p) => ({ ...p, scale })),
             },
             isCalibrating: false,
             calibrationPoints: [],
@@ -186,12 +200,10 @@ export const useTakeoffStore = create<TakeoffState>()(
           };
         }),
 
-      setVerifyPoints: (points) => set({ verifyPoints: points }),
-
-      setVerifyResult: (result) => set({ verifyResult: result }),
-
-      clearVerify: () =>
-        set({ isVerifying: false, verifyPoints: [], verifyResult: null, activeTool: 'select' }),
+      setDimensionPoints: (points) => set({ dimensionPoints: points }),
+      setDimensionResult: (result) => set({ dimensionResult: result }),
+      clearDimension: () =>
+        set({ isDimensioning: false, dimensionPoints: [], dimensionResult: null, activeTool: 'select' }),
     }),
     { name: 'takeoff-pro' }
   )

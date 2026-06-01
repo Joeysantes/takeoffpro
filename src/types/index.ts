@@ -10,7 +10,7 @@ export type TradeCategory =
   | 'Painting'
   | 'Flooring';
 export type MeasurementType = 'linear' | 'area' | 'count';
-export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'verify';
+export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'dimension';
 export type AppTab = 'plan' | 'estimating';
 export type PriceMode = 'per-unit' | 'per-sqft' | 'per-cuft';
 

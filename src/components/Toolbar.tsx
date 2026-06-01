@@ -1,27 +1,16 @@
 import { useState, useRef } from 'react';
 import { useTakeoffStore } from '../store/takeoffStore';
+import { SCALE_PRESETS } from '../utils/scalePresets';
 import type { ActiveTool, AppTab } from '../types';
 
-const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-
-const SCALE_PRESETS = [
-  { label: 'No Scale', feet: null },
-  { label: "1/8\"=1'", feet: 96 },
-  { label: "1/4\"=1'", feet: 48 },
-  { label: "3/8\"=1'", feet: 32 },
-  { label: "1/2\"=1'", feet: 16 },
-  { label: "3/4\"=1'", feet: 10.667 },
-  { label: "1\"=1'", feet: 8 },
-  { label: '1:50', ratio: 50 },
-  { label: '1:100', ratio: 100 },
-  { label: '1:200', ratio: 200 },
-];
+const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
 const TOOLS: { tool: ActiveTool; label: string; key: string }[] = [
-  { tool: 'select', label: 'Select', key: 'S' },
-  { tool: 'linear', label: 'Linear', key: 'L' },
-  { tool: 'area', label: 'Area', key: 'A' },
-  { tool: 'count', label: 'Count', key: 'C' },
+  { tool: 'select',  label: 'Select',    key: 'S' },
+  { tool: 'linear',  label: 'Linear',    key: 'L' },
+  { tool: 'area',    label: 'Area',      key: 'A' },
+  { tool: 'count',   label: 'Count',     key: 'C' },
+  { tool: 'dimension', label: 'Dimension', key: 'D' },
 ];
 
 interface Props {
@@ -36,7 +25,7 @@ export default function Toolbar({ onAddPage }: Props) {
     activeTool,
     activeTab,
     isCalibrating,
-    isVerifying,
+    isDimensioning,
     setActiveTool,
     setActiveTab,
     setZoom,
@@ -63,20 +52,17 @@ export default function Toolbar({ onAddPage }: Props) {
   function zoomIn() {
     const idx = ZOOM_LEVELS.indexOf(zoom);
     if (idx < ZOOM_LEVELS.length - 1) setZoom(ZOOM_LEVELS[idx + 1]);
+    else setZoom(ZOOM_LEVELS[ZOOM_LEVELS.length - 1]);
   }
 
   function zoomOut() {
     const idx = ZOOM_LEVELS.indexOf(zoom);
     if (idx > 0) setZoom(ZOOM_LEVELS[idx - 1]);
+    else setZoom(ZOOM_LEVELS[0]);
   }
 
-  function handleScalePreset(label: string) {
-    if (!page) return;
-    const preset = SCALE_PRESETS.find((p) => p.label === label);
-    if (!preset || !('feet' in preset) || preset.feet === null) return;
-    // Need calibration points — trigger calibrate tool with preset context
-    setActiveTool('calibrate');
-  }
+  const isActive = (tool: ActiveTool) => activeTool === tool;
+  const showHint = isCalibrating || isDimensioning;
 
   return (
     <div className="shrink-0 bg-white border-b border-zinc-200">
@@ -85,7 +71,7 @@ export default function Toolbar({ onAddPage }: Props) {
         {(['plan', 'estimating'] as AppTab[]).map((tab) => (
           <button
             key={tab}
-            className={`px-5 py-2 text-sm font-medium border-b-2 transition-colors capitalize ${
+            className={`px-5 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-zinc-500 hover:text-zinc-700'
@@ -97,18 +83,19 @@ export default function Toolbar({ onAddPage }: Props) {
         ))}
       </div>
 
-      {/* Main toolbar — only show in plan view */}
+      {/* Main toolbar — plan view only */}
       {activeTab === 'plan' && (
-        <div className="h-12 flex items-center px-3 gap-2">
-          {/* Left: Logo + project name + add pages */}
-          <span className="font-bold text-blue-600 text-base mr-1">TakeoffPro</span>
+        <div className="h-12 flex items-center px-3 gap-2 overflow-x-auto">
+
+          {/* Logo + project name + add pages */}
+          <span className="font-bold text-blue-600 text-base shrink-0">TakeoffPro</span>
 
           {project && (
             <>
               {editingName ? (
                 <input
                   ref={nameInputRef}
-                  className="border border-blue-400 rounded px-2 py-0.5 text-sm font-medium text-zinc-800 w-40 focus:outline-none"
+                  className="border border-blue-400 rounded px-2 py-0.5 text-sm font-medium text-zinc-800 w-40 focus:outline-none shrink-0"
                   value={nameVal}
                   onChange={(e) => setNameVal(e.target.value)}
                   onBlur={commitRename}
@@ -119,7 +106,7 @@ export default function Toolbar({ onAddPage }: Props) {
                 />
               ) : (
                 <button
-                  className="text-sm font-medium text-zinc-700 hover:text-blue-600 hover:underline max-w-[150px] truncate"
+                  className="text-sm font-medium text-zinc-700 hover:text-blue-600 hover:underline max-w-[140px] truncate shrink-0"
                   onClick={startRename}
                   title="Click to rename project"
                 >
@@ -128,99 +115,86 @@ export default function Toolbar({ onAddPage }: Props) {
               )}
 
               <button
-                className="px-2.5 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 flex items-center gap-1"
+                className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 flex items-center gap-1 shrink-0"
                 onClick={() => onAddPage(false)}
-                title="Add single page"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Page
+                <span className="text-base leading-none">+</span> Add Page
               </button>
               <button
-                className="px-2.5 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50"
+                className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 shrink-0"
                 onClick={() => onAddPage(true)}
-                title="Add multiple pages"
               >
                 Add Batch
               </button>
             </>
           )}
 
-          <div className="w-px h-6 bg-zinc-200 mx-1" />
+          <div className="w-px h-6 bg-zinc-200 shrink-0" />
 
-          {/* Center: Tools */}
+          {/* Hint bar OR tool buttons */}
+          {showHint ? (
+            <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1 shrink-0">
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {isCalibrating
+                ? 'Click two points on a known dimension — Esc to cancel'
+                : 'Click a point, move cursor to see live distance — Esc to cancel'}
+            </div>
+          ) : project ? (
+            <div className="flex items-center gap-1 bg-zinc-100 rounded-lg p-0.5 shrink-0">
+              {TOOLS.map(({ tool, label, key }) => (
+                <button
+                  key={tool}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
+                    isActive(tool)
+                      ? 'bg-blue-600 text-white'
+                      : 'text-zinc-600 hover:bg-zinc-200'
+                  }`}
+                  onClick={() => setActiveTool(isActive(tool) ? 'select' : tool)}
+                  title={`${label} (${key})`}
+                >
+                  {label}
+                  <kbd className={`text-[10px] px-0.5 rounded ${isActive(tool) ? 'opacity-70' : 'text-zinc-400'}`}>
+                    {key}
+                  </kbd>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           {project && (
             <>
-              {isCalibrating || isVerifying ? (
-                <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1">
-                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  {isCalibrating
-                    ? 'Click two points on a known dimension — Esc to cancel'
-                    : 'Click two points to verify scale — Esc to cancel'}
-                </div>
-              ) : (
-                <div className="flex items-center gap-1 bg-zinc-100 rounded-lg p-0.5">
-                  {TOOLS.map(({ tool, label, key }) => (
-                    <button
-                      key={tool}
-                      className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
-                        activeTool === tool
-                          ? 'bg-blue-600 text-white'
-                          : 'text-zinc-600 hover:bg-zinc-200'
-                      }`}
-                      onClick={() => setActiveTool(tool)}
-                      title={`${label} (${key})`}
-                    >
-                      {label}
-                      <kbd className={`text-[10px] px-0.5 rounded ${activeTool === tool ? 'opacity-70' : 'text-zinc-400'}`}>
-                        {key}
-                      </kbd>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="w-px h-6 bg-zinc-200 shrink-0" />
 
-              <div className="w-px h-6 bg-zinc-200 mx-1" />
-
-              {/* Scale section */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-zinc-500 shrink-0">Scale:</span>
+              {/* Scale */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs text-zinc-500">Scale:</span>
                 <select
-                  className="border border-zinc-300 rounded px-2 py-1 text-xs"
-                  value={page?.scale?.label?.split(' (')[0] ?? 'No Scale'}
-                  onChange={(e) => handleScalePreset(e.target.value)}
+                  className="border border-zinc-300 rounded px-1.5 py-1 text-xs max-w-[130px]"
+                  value={page?.scale?.label ?? 'No Scale'}
+                  onChange={(e) => {
+                    // selecting a preset alone just activates calibrate so user clicks 2 points
+                    if (e.target.value !== 'No Scale') setActiveTool('calibrate');
+                  }}
                 >
                   {SCALE_PRESETS.map((p) => (
                     <option key={p.label} value={p.label}>{p.label}</option>
                   ))}
                 </select>
                 <button
-                  className={`px-2.5 py-1 text-xs rounded border transition-colors ${
-                    activeTool === 'calibrate'
+                  className={`px-2 py-1 text-xs rounded border transition-colors ${
+                    isActive('calibrate')
                       ? 'bg-blue-600 text-white border-blue-600'
                       : 'border-zinc-300 hover:bg-zinc-50'
                   }`}
-                  onClick={() => setActiveTool(activeTool === 'calibrate' ? 'select' : 'calibrate')}
-                  title="Click two points to calibrate scale"
+                  onClick={() => setActiveTool(isActive('calibrate') ? 'select' : 'calibrate')}
                 >
                   Set Scale
                 </button>
-                <button
-                  className={`px-2.5 py-1 text-xs rounded border transition-colors ${
-                    activeTool === 'verify'
-                      ? 'bg-green-600 text-white border-green-600'
-                      : 'border-zinc-300 hover:bg-zinc-50'
-                  }`}
-                  onClick={() => setActiveTool(activeTool === 'verify' ? 'select' : 'verify')}
-                  title="Click two points to verify scale"
-                >
-                  Verify
-                </button>
                 {page?.scale && (
-                  <span className="text-xs text-zinc-500 max-w-[120px] truncate" title={page.scale.label}>
+                  <span className="text-xs text-zinc-500 max-w-[100px] truncate" title={page.scale.label}>
                     {page.scale.label}
                   </span>
                 )}
@@ -228,24 +202,21 @@ export default function Toolbar({ onAddPage }: Props) {
             </>
           )}
 
-          {/* Right: Zoom */}
-          <div className="ml-auto flex items-center gap-1">
+          {/* Zoom controls — right side */}
+          <div className="ml-auto flex items-center gap-1 shrink-0">
             <button
-              className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-600 font-bold"
+              className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700 font-bold text-base disabled:opacity-30"
               onClick={zoomOut}
               disabled={zoom <= ZOOM_LEVELS[0]}
-            >
-              −
-            </button>
+            >−</button>
             <span className="text-xs text-zinc-600 w-10 text-center">{Math.round(zoom * 100)}%</span>
             <button
-              className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-600 font-bold"
+              className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700 font-bold text-base disabled:opacity-30"
               onClick={zoomIn}
               disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
-            >
-              +
-            </button>
+            >+</button>
           </div>
+
         </div>
       )}
     </div>
