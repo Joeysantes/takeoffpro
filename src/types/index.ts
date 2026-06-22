@@ -10,7 +10,7 @@ export type TradeCategory =
   | 'Painting'
   | 'Flooring';
 export type MeasurementType = 'linear' | 'area' | 'count';
-export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'dimension';
+export type ActiveTool = 'select' | 'linear' | 'area' | 'count' | 'calibrate' | 'dimension' | 'note' | 'highlight';
 export type AppTab = 'plan' | 'estimating' | 'assemblies';
 export type PriceMode = 'per-unit' | 'per-sqft' | 'per-cuft';
 
@@ -37,6 +37,17 @@ export interface Measurement {
   formula?: string;
 }
 
+export interface Annotation {
+  id: string;
+  type: 'note' | 'highlight';
+  pageIndex: number;
+  position: Point;
+  text?: string;
+  points?: Point[];
+  color: string;
+  visible: boolean;
+}
+
 export interface PlanPage {
   pageIndex: number;
   name?: string;
@@ -47,6 +58,7 @@ export interface PlanPage {
   scale: ScaleConfig | null;
   colorMode: ColorMode;
   measurements: Measurement[];
+  annotations: Annotation[];
 }
 
 export interface Project {

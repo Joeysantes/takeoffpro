@@ -3,14 +3,25 @@ import { useTakeoffStore } from '../store/takeoffStore';
 import { SCALE_PRESETS, getFeetPerInch } from '../utils/scalePresets';
 import type { ActiveTool, AppTab } from '../types';
 
-const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+const ZOOM_STEPS = [0.1, 0.15, 0.2, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
 
-const TOOLS: { tool: ActiveTool; label: string; key: string }[] = [
+const HIGHLIGHT_COLORS = [
+  { label: 'Yellow', hex: '#FDE047' },
+  { label: 'Green',  hex: '#86EFAC' },
+  { label: 'Blue',   hex: '#93C5FD' },
+  { label: 'Pink',   hex: '#F9A8D4' },
+  { label: 'Orange', hex: '#FED7AA' },
+];
+
+interface ToolDef { tool: ActiveTool; label: string; key: string; dividerBefore?: boolean; }
+const TOOLS: ToolDef[] = [
   { tool: 'select',    label: 'Select',    key: 'S' },
-  { tool: 'linear',   label: 'Linear',    key: 'L' },
+  { tool: 'linear',   label: 'Linear',    key: 'L', dividerBefore: true },
   { tool: 'area',     label: 'Area',      key: 'A' },
   { tool: 'count',    label: 'Count',     key: 'C' },
-  { tool: 'dimension', label: 'Dimension', key: 'D' },
+  { tool: 'dimension',label: 'Dimension', key: 'D', dividerBefore: true },
+  { tool: 'note',     label: 'Note',      key: 'N', dividerBefore: true },
+  { tool: 'highlight',label: 'Highlight', key: 'H' },
 ];
 
 const TABS: { id: AppTab; label: string }[] = [
@@ -27,8 +38,9 @@ export default function Toolbar({ onAddPage }: Props) {
   const {
     project, currentPageIndex, zoom, activeTool, activeTab,
     isCalibrating, isDimensioning, pendingPresetLabel,
+    highlightColor, setHighlightColor,
     setActiveTool, setActiveTab, setZoom, setScale,
-    setPendingPreset, renameProject,
+    setPendingPreset, renameProject, requestZoom,
   } = useTakeoffStore();
 
   const [editingName, setEditingName] = useState(false);
@@ -38,7 +50,6 @@ export default function Toolbar({ onAddPage }: Props) {
 
   const page = project?.pages[currentPageIndex];
 
-  // Keep dropdown in sync with page scale
   function startRename() {
     setNameVal(project?.name ?? '');
     setEditingName(true);
@@ -50,14 +61,12 @@ export default function Toolbar({ onAddPage }: Props) {
   }
 
   function zoomIn() {
-    const idx = ZOOM_LEVELS.findIndex((z) => z >= zoom);
-    const next = idx < ZOOM_LEVELS.length - 1 ? ZOOM_LEVELS[idx + 1] : ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
-    setZoom(next);
+    const idx = ZOOM_STEPS.findIndex((z) => z > zoom + 0.001);
+    setZoom(idx >= 0 ? ZOOM_STEPS[idx] : ZOOM_STEPS[ZOOM_STEPS.length - 1]);
   }
   function zoomOut() {
-    const idx = ZOOM_LEVELS.findLastIndex((z) => z <= zoom);
-    const prev = idx > 0 ? ZOOM_LEVELS[idx - 1] : ZOOM_LEVELS[0];
-    setZoom(prev);
+    const idx = ZOOM_STEPS.findLastIndex((z) => z < zoom - 0.001);
+    setZoom(idx >= 0 ? ZOOM_STEPS[idx] : ZOOM_STEPS[0]);
   }
 
   function handlePresetSelect(label: string) {
@@ -75,9 +84,7 @@ export default function Toolbar({ onAddPage }: Props) {
     const fpi = getFeetPerInch(preset);
     if (!fpi) return;
     const pixelsPerFoot = renderDPI / fpi;
-    const scaleConfig = { pixelsPerFoot, label: preset.label };
-    // Apply to current page; hold shift would apply all — for simplicity apply to current only here
-    setScale(currentPageIndex, scaleConfig);
+    setScale(currentPageIndex, { pixelsPerFoot, label: preset.label });
   }
 
   const isActive = (tool: ActiveTool) => activeTool === tool;
@@ -130,7 +137,7 @@ export default function Toolbar({ onAddPage }: Props) {
                 </button>
               )}
               <button
-                className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 flex items-center gap-1 shrink-0"
+                className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 shrink-0"
                 onClick={() => onAddPage(false)}
               >
                 + Page
@@ -157,20 +164,50 @@ export default function Toolbar({ onAddPage }: Props) {
                 : 'Click a point then move cursor to see live distance — Esc to cancel'}
             </div>
           ) : project ? (
-            <div className="flex items-center gap-1 bg-zinc-100 rounded-lg p-0.5 shrink-0">
-              {TOOLS.map(({ tool, label, key }) => (
-                <button
-                  key={tool}
-                  className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
-                    isActive(tool) ? 'bg-blue-600 text-white' : 'text-zinc-600 hover:bg-zinc-200'
-                  }`}
-                  onClick={() => setActiveTool(isActive(tool) ? 'select' : tool)}
-                  title={`${label} (${key})`}
-                >
-                  {label}
-                  <kbd className={`text-[10px] px-0.5 rounded ${isActive(tool) ? 'opacity-70' : 'text-zinc-400'}`}>{key}</kbd>
-                </button>
-              ))}
+            <div className="flex items-center shrink-0">
+              <div className="flex items-center gap-0.5 bg-zinc-100 rounded-lg p-0.5">
+                {TOOLS.map(({ tool, label, key, dividerBefore }) => (
+                  <>
+                    {dividerBefore && <div key={`div-${tool}`} className="w-px h-5 bg-zinc-300 mx-0.5" />}
+                    <button
+                      key={tool}
+                      className={`px-2 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
+                        isActive(tool) ? 'bg-blue-600 text-white' : 'text-zinc-600 hover:bg-zinc-200'
+                      }`}
+                      onClick={() => setActiveTool(isActive(tool) ? 'select' : tool)}
+                      title={`${label} (${key})`}
+                    >
+                      {tool === 'note' && (
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                        </svg>
+                      )}
+                      {tool === 'highlight' && (
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      )}
+                      {label}
+                      <kbd className={`text-[10px] px-0.5 rounded ${isActive(tool) ? 'opacity-70' : 'text-zinc-400'}`}>{key}</kbd>
+                    </button>
+                  </>
+                ))}
+              </div>
+
+              {/* Highlight color swatches — shown only when highlight tool is active */}
+              {isActive('highlight') && (
+                <div className="flex items-center gap-1 ml-2 p-1 bg-zinc-100 rounded-lg">
+                  {HIGHLIGHT_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      className={`w-5 h-5 rounded-full transition-all ${highlightColor === c.hex ? 'ring-2 ring-offset-1 ring-zinc-600 scale-110' : 'hover:scale-110'}`}
+                      style={{ background: c.hex }}
+                      title={c.label}
+                      onClick={() => setHighlightColor(c.hex)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ) : null}
 
@@ -205,17 +242,15 @@ export default function Toolbar({ onAddPage }: Props) {
                   <option value="Custom">Custom</option>
                 </select>
 
-                {/* Quick Apply — direct apply using renderDPI */}
                 <button
                   className="px-2 py-1 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 shrink-0"
                   onClick={handleQuickApply}
                   disabled={!selectedPresetLabel || selectedPresetLabel === 'No Scale' || selectedPresetLabel === 'Custom'}
-                  title="Apply scale immediately (uses document render DPI — verify with Dimension tool)"
+                  title="Apply scale immediately"
                 >
                   Quick Apply
                 </button>
 
-                {/* Manual calibration */}
                 <button
                   className={`px-2 py-1 text-xs rounded border transition-colors shrink-0 ${
                     isActive('calibrate')
@@ -240,19 +275,34 @@ export default function Toolbar({ onAddPage }: Props) {
             </>
           )}
 
-          {/* Zoom */}
+          {/* Zoom controls */}
           <div className="ml-auto flex items-center gap-1 shrink-0">
             <button
               className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700 font-bold text-base disabled:opacity-30"
               onClick={zoomOut}
-              disabled={zoom <= ZOOM_LEVELS[0]}
+              disabled={zoom <= 0.1}
             >−</button>
             <span className="text-xs text-zinc-600 w-10 text-center select-none">{Math.round(zoom * 100)}%</span>
             <button
               className="w-7 h-7 flex items-center justify-center rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-700 font-bold text-base disabled:opacity-30"
               onClick={zoomIn}
-              disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
+              disabled={zoom >= 8}
             >+</button>
+            <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+            <button
+              className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-600"
+              onClick={() => requestZoom('fit')}
+              title="Fit plan to window"
+            >
+              Fit
+            </button>
+            <button
+              className="px-2 py-1 text-xs rounded border border-zinc-300 hover:bg-zinc-50 text-zinc-600"
+              onClick={() => requestZoom(1)}
+              title="Reset to 100% zoom"
+            >
+              100%
+            </button>
           </div>
         </div>
       )}

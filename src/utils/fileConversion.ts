@@ -48,6 +48,7 @@ function makePage(
     scale: null,
     colorMode,
     measurements: [],
+    annotations: [],
   };
 }
 

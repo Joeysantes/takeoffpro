@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   Project, PlanPage, ActiveTool, ScaleConfig,
-  Measurement, Point, AppTab, TradeCategory,
+  Measurement, Annotation, Point, AppTab, TradeCategory,
 } from '../types';
 import { getNextColor } from '../utils/measurementUtils';
 
@@ -39,6 +39,8 @@ interface TakeoffState {
   pendingPresetLabel: string | null;
   hiddenTrades: TradeCategory[];
   activeSession: MeasurementSession | null;
+  zoomRequest: 'fit' | number | null;
+  highlightColor: string;
 
   setProject: (project: Project | null) => void;
   setCurrentPage: (index: number) => void;
@@ -63,6 +65,11 @@ interface TakeoffState {
   setPendingPreset: (label: string | null) => void;
   toggleTradeVisibility: (trade: TradeCategory) => void;
   setHiddenTrades: (trades: TradeCategory[]) => void;
+  addAnnotation: (annotation: Annotation) => void;
+  updateAnnotation: (id: string, updates: Partial<Annotation>) => void;
+  deleteAnnotation: (id: string) => void;
+  requestZoom: (req: 'fit' | number | null) => void;
+  setHighlightColor: (color: string) => void;
   startSession: (session: MeasurementSession) => void;
   bumpSessionCount: () => void;
   addCountPoint: (point: Point, pageIndex: number) => void;
@@ -95,9 +102,15 @@ export const useTakeoffStore = create<TakeoffState>()(
       pendingPresetLabel: null,
       hiddenTrades: [],
       activeSession: null,
+      zoomRequest: null,
+      highlightColor: '#FDE047',
 
-      setProject: (project) =>
-        set({ project, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan', hiddenTrades: [], activeSession: null }),
+      setProject: (project) => {
+        const normalized = project
+          ? { ...project, pages: project.pages.map((p) => ({ ...p, annotations: p.annotations ?? [] })) }
+          : null;
+        set({ project: normalized, currentPageIndex: 0, selectedMeasurementId: null, activeTab: 'plan', hiddenTrades: [], activeSession: null });
+      },
 
       setCurrentPage: (index) => set({ currentPageIndex: index, selectedMeasurementId: null }),
 
@@ -239,6 +252,7 @@ export const useTakeoffStore = create<TakeoffState>()(
             ...p,
             pageIndex: offset + i,
             measurements: p.measurements.map((m) => ({ ...m, pageIndex: offset + i })),
+            annotations: p.annotations ?? [],
           }));
           return { project: { ...state.project, pages: [...state.project.pages, ...reindexed] } };
         }),
@@ -258,6 +272,51 @@ export const useTakeoffStore = create<TakeoffState>()(
         })),
 
       setHiddenTrades: (trades) => set({ hiddenTrades: trades }),
+
+      addAnnotation: (annotation) =>
+        set((state) => {
+          if (!state.project) return state;
+          return {
+            project: {
+              ...state.project,
+              pages: updatePage(state.project.pages, annotation.pageIndex, (p) => ({
+                ...p,
+                annotations: [...(p.annotations ?? []), annotation],
+              })),
+            },
+          };
+        }),
+
+      updateAnnotation: (id, updates) =>
+        set((state) => {
+          if (!state.project) return state;
+          return {
+            project: {
+              ...state.project,
+              pages: state.project.pages.map((p) => ({
+                ...p,
+                annotations: (p.annotations ?? []).map((a) => a.id === id ? { ...a, ...updates } : a),
+              })),
+            },
+          };
+        }),
+
+      deleteAnnotation: (id) =>
+        set((state) => {
+          if (!state.project) return state;
+          return {
+            project: {
+              ...state.project,
+              pages: state.project.pages.map((p) => ({
+                ...p,
+                annotations: (p.annotations ?? []).filter((a) => a.id !== id),
+              })),
+            },
+          };
+        }),
+
+      requestZoom: (req) => set({ zoomRequest: req }),
+      setHighlightColor: (color) => set({ highlightColor: color }),
 
       startSession: (session) =>
         set({ activeSession: session, activeTool: session.type as ActiveTool }),
